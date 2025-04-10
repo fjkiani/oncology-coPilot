@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import PropTypes from 'prop-types';
+import useWebSocket from '../../../frontend/src/hooks/useWebSocket';
 
 // Helper function to format dates (optional, basic implementation)
 const formatDate = (dateString) => {
@@ -19,13 +20,63 @@ const PatientRecordViewer = ({ patientData }) => {
   const [promptError, setPromptError] = useState(null);
   const [activeActionTab, setActiveActionTab] = useState(null);
 
+  // --- WebSocket Setup ---
+  const patientId = patientData?.patientId; // Get patientId for room
+  const wsUrl = patientId ? `ws://localhost:8000/ws` : null; // Only connect if patientId exists
+  const authToken = "valid_token_" + (patientId || 'anon'); // Placeholder token 
+
+  const {
+    isConnected: isWsConnected, // Rename to avoid conflict with prompt processing state
+    lastMessage: lastWsMessage, 
+    sendMessage: sendWsMessage,
+    error: wsError,
+    readyState: wsReadyState
+  } = useWebSocket(wsUrl, authToken, patientId); 
+
+  // Effect to handle incoming WebSocket messages
+  useEffect(() => {
+    if (lastWsMessage) {
+      console.log("Processing WebSocket message in component:", lastWsMessage);
+      const { type, message, result, error } = lastWsMessage;
+      
+      if (type === 'prompt_result') {
+        setPromptResult(result);
+        setPromptError(null);
+        setIsProcessingPrompt(false);
+      } else if (type === 'status') {
+        // Optionally update UI to show specific status messages
+        console.log("WebSocket Status Update:", message);
+        // Maybe set a transient status message state here?
+        // setIsProcessingPrompt(true); // Keep processing state while receiving status updates
+      } else if (type === 'error') {
+        setPromptError(message || 'Unknown WebSocket error');
+        setPromptResult(null);
+        setIsProcessingPrompt(false);
+      } else if (type === 'auth_fail' || type === 'join_fail'){
+        // Handle connection level errors reported by the backend
+        setPromptError(`WebSocket connection failed: ${error || 'Unknown reason'}`);
+        setIsProcessingPrompt(false); // Stop processing if auth/join failed
+      }
+      // Other message types like auth_ok, join_ok are handled by the hook itself primarily for state
+    }
+  }, [lastWsMessage]); // Re-run when a new message arrives
+
+  // Effect to handle WebSocket connection errors (from the hook itself)
+  useEffect(() => {
+    if (wsError) {
+      console.error("WebSocket Hook Error:", wsError);
+      // Display a more persistent connection error
+      setPromptError(`WebSocket Connection Error: ${wsError.message}`);
+      setIsProcessingPrompt(false); // Ensure processing stops on connection error
+    }
+  }, [wsError]);
+  
   if (!patientData) {
     return <div className="p-4 text-center text-gray-500">No patient data available.</div>;
   }
 
   // Destructure for easier access, providing default empty objects/arrays
   const {
-    patientId = 'N/A',
     demographics = {},
     diagnosis = {},
     medicalHistory = [],
@@ -37,63 +88,43 @@ const PatientRecordViewer = ({ patientData }) => {
     notes = []
   } = patientData;
 
-  // --- Generic Prompt Submission Handler --- 
-  const submitPrompt = async (currentPrompt) => {
-    if (!currentPrompt.trim() || !patientId) {
-      setPromptError("Cannot process empty prompt or missing patient ID.");
-      return;
-    }
+  // --- New WebSocket Prompt Submission Handler ---
+  const submitPromptViaWebSocket = (currentPrompt) => {
+     if (!currentPrompt.trim()) {
+       setPromptError("Cannot process empty prompt.");
+       return;
+     }
+     if (!isWsConnected) {
+       setPromptError("WebSocket is not connected. Please wait or refresh.");
+       console.error("Attempted to send prompt while WebSocket is not connected.");
+       return;
+     }
 
-    setIsProcessingPrompt(true);
-    setPromptResult(null);
-    setPromptError(null);
-    console.log(`Sending prompt for patient ${patientId}: ${currentPrompt}`);
+     setIsProcessingPrompt(true);
+     setPromptResult(null);
+     setPromptError(null);
+     console.log(`Sending prompt via WebSocket for patient ${patientId}: ${currentPrompt}`);
 
-    try {
-      const response = await fetch(`http://localhost:8000/api/prompt/${patientId}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ prompt: currentPrompt })
-      });
+     // Send message in the format expected by the backend WS endpoint
+     sendWsMessage({
+       type: "prompt", // Indicate this is a prompt message
+       prompt: currentPrompt
+     });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
-        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
-      }
-
-      const result = await response.json();
-      console.log("Received prompt result:", result);
-      setPromptResult(result); // Store the entire result
-
-      // Handle non-success statuses for user feedback 
-      if (result.status !== "success") {
-        if (result.status === "failure") {
-          setPromptError(result.error_message || "Processing failed.");
-        } else if (result.status === "agent_not_implemented") {
-          setPromptError(result.message || "This feature is not yet available."); 
-        } else if (result.status === "unknown_intent") {
-          setPromptError(result.message || "Could not understand the request.");
-        } else {
-          // Catch-all for other statuses
-          setPromptError(result.message || `Received status: ${result.status}`);
-        }
-      }
-
-    } catch (err) {
-      console.error("Error processing prompt:", err);
-      setPromptError(err.message || "Failed to process prompt.");
-    } finally {
-      setIsProcessingPrompt(false);
-    }
+     // Note: We no longer handle the response directly here.
+     // The useEffect hook listening to lastWsMessage will handle the result.
   };
 
-  // Handler for the form submission
+  // Handler for the form submission - NOW USES WEBSOCKET
   const handlePromptFormSubmit = (e) => {
     e.preventDefault();
-    submitPrompt(promptText); // Use the text from the textarea
+    submitPromptViaWebSocket(promptText); // New WebSocket call
   };
+
+  // Handler for the Quick Summary button - NOW USES WEBSOCKET
+  const handleQuickSummaryClick = () => {
+    submitPromptViaWebSocket("Generate a clinical summary"); // New WebSocket call
+  }
 
   // Placeholder handler for future actions
   const handlePlaceholderAction = (actionName) => {
@@ -109,6 +140,17 @@ const PatientRecordViewer = ({ patientData }) => {
       {/* --- CoPilot Prompt Panel --- */}
       <section className="p-4 bg-white rounded shadow sticky top-5 z-10 max-h-[50vh] overflow-y-auto">
         <h3 className="text-xl font-semibold mb-3 border-b pb-2 text-indigo-700">CoPilot Prompt</h3>
+        {/* Display WebSocket Connection Status */} 
+        <div className="text-xs mb-2 text-right">
+          WebSocket Status: 
+          {wsUrl ? (
+            <span className={`font-semibold ${isWsConnected ? 'text-green-600' : (wsReadyState === 0 ? 'text-yellow-600' : 'text-red-600')}`}>
+              {isWsConnected ? 'Connected' : (wsReadyState === 0 ? 'Connecting...' : (wsReadyState === 2 ? 'Closing...' : 'Disconnected'))}
+            </span>
+          ) : (
+            <span className="text-gray-500 font-semibold">Inactive (No Patient ID)</span>
+          )}
+        </div>
         <form onSubmit={handlePromptFormSubmit} className="space-y-3">
           <textarea
             value={promptText}
@@ -116,7 +158,7 @@ const PatientRecordViewer = ({ patientData }) => {
             placeholder={`Ask about ${demographics.name || 'this patient'} (e.g., "Summarize latest notes", "What was the last WBC?", "Notify PCP about elevated glucose")`}
             className="w-full p-2 border rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm"
             rows={3}
-            disabled={isProcessingPrompt}
+            disabled={isProcessingPrompt || !isWsConnected} // Disable if processing OR not connected
           />
           {/* --- Quick Action Buttons/Tags --- */}
           <div className="flex flex-wrap gap-2 text-xs mb-2"> {/* Reduced mb */}
@@ -293,37 +335,36 @@ const PatientRecordViewer = ({ patientData }) => {
           <div className="flex items-center space-x-2">
             <button 
               type="submit" 
-              disabled={isProcessingPrompt || !promptText.trim()}
-              className={`flex-grow px-4 py-2 rounded-md text-white font-semibold transition-colors duration-200 ${
-                isProcessingPrompt || !promptText.trim()
-                  ? 'bg-gray-400 cursor-not-allowed'
-                  : 'bg-indigo-600 hover:bg-indigo-700'
-              }`}
+              disabled={isProcessingPrompt || !promptText.trim() || !isWsConnected} // Disable if processing, empty, OR not connected
+              className={`flex-grow px-4 py-2 rounded-md text-white font-semibold transition-colors duration-200 ${isProcessingPrompt || !promptText.trim() || !isWsConnected ? 'bg-gray-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}
             >
               {isProcessingPrompt ? 'Processing...' : 'Submit Prompt'}
             </button>
             <button 
               type="button" 
-              onClick={() => submitPrompt("Generate a clinical summary")}
-              disabled={isProcessingPrompt}
-              className={`px-4 py-2 rounded-md text-white font-semibold transition-colors duration-200 ${
-                isProcessingPrompt
-                  ? 'bg-gray-400 cursor-not-allowed'
-                  : 'bg-blue-600 hover:bg-blue-700'
-              }`}
+              onClick={handleQuickSummaryClick} // Updated handler
+              disabled={isProcessingPrompt || !isWsConnected} // Disable if processing OR not connected
+              className={`px-4 py-2 rounded-md text-white font-semibold transition-colors duration-200 ${isProcessingPrompt || !isWsConnected ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
             >
               {isProcessingPrompt ? 'Processing...' : 'Quick Summary'}
             </button>
           </div>
         </form>
         {/* --- Display Prompt Results/Errors --- */}
+        {/* Display WebSocket connection errors first if they exist */} 
+        {wsError && !promptError && ( // Show WS error if no specific prompt error is active
+           <div className="mt-3 p-3 bg-red-100 border border-red-400 text-red-700 rounded text-sm">
+            <p><strong>Connection Error:</strong> {promptError || wsError.message}</p> {/* Prioritize promptError if set */} 
+          </div>
+        )}
+        {/* Display prompt processing errors */} 
         {promptError && (
           <div className="mt-3 p-3 bg-red-100 border border-red-400 text-red-700 rounded text-sm">
             <p><strong>Error:</strong> {promptError}</p>
           </div>
         )}
         {/* Display results in a more structured way */} 
-        {promptResult && !promptError && ( 
+        {promptResult && !promptError && ( // Only show results if no error
           <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded text-sm space-y-2">
             <p className="font-semibold mb-1">CoPilot Response (Status: <span className={`font-bold ${promptResult.status === 'success' ? 'text-green-700' : 'text-orange-700'}`}>{promptResult.status}</span>)</p>
             

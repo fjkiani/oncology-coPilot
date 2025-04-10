@@ -143,8 +143,7 @@ class AgentOrchestrator:
             agent_to_run = self.agents[agent_name_to_use]
             
             # --- Adapt call signature --- 
-            if agent_name_to_use == CLINICAL_TRIAL_FINDER:
-                # ClinicalTrialAgent expects run(context, **kwargs)
+            if agent_name_to_use in [CLINICAL_TRIAL_FINDER, DATA_ANALYZER]:
                 agent_result = await agent_to_run.run(context=context, **agent_kwargs)
             else:
                  # Other agents expect run(patient_data, prompt_details) 

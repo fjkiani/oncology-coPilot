@@ -1,18 +1,21 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel # Import BaseModel
 import json
 import os
 from dotenv import load_dotenv # Import load_dotenv
+import asyncio # Import asyncio if not already present
+from typing import Optional # <-- Import Optional for type hinting
 # Placeholder for future Python-based AI utils
 # from . import ai_utils 
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Import the orchestrator and blockchain utility
+# Import the orchestrator, blockchain utility, and connection manager
 from core.orchestrator import AgentOrchestrator
 from core.blockchain_utils import record_contribution # <-- Import the new function
+from core.connection_manager import manager # <-- Import the connection manager
 
 app = FastAPI()
 
@@ -153,6 +156,19 @@ mock_patient_data_dict = {
   }
 }
 
+# --- Placeholder Authentication --- 
+# In a real app, this would involve JWT decoding, session checking, etc.
+async def authenticate_websocket_token(token: str) -> Optional[str]:
+    """Placeholder function to validate a token from WebSocket."""
+    print(f"Attempting to authenticate token: {token[:10]}...")
+    # Dummy validation: Check if token is not empty and maybe has a prefix
+    if token and token.startswith("valid_token_"):
+        user_id = token.split("_")[-1] # Extract dummy user ID
+        print(f"Token validated successfully for user: {user_id}")
+        return user_id
+    print("Token validation failed.")
+    return None
+# --- End Placeholder --- 
 
 # Define the endpoint to get patient data
 @app.get("/api/patients/{patient_id}")
@@ -236,13 +252,111 @@ async def handle_feedback(patient_id: str, request: FeedbackRequest):
         print(f"Error handling feedback: {e}")
         raise HTTPException(status_code=500, detail=f"An internal error occurred while processing feedback: {e}")
 
-# Root endpoint (optional)
+# --- WebSocket Endpoint ---
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    authenticated = False
+    user_id = None
+    current_room = None # Store the patient_id the user joined
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                message = json.loads(data)
+                message_type = message.get("type")
+
+                if message_type == "auth":
+                    token = message.get("token")
+                    user_id = await authenticate_websocket_token(token)
+                    if user_id:
+                        authenticated = True
+                        await manager.send_personal_message(json.dumps({"type": "auth_ok", "user_id": user_id}), websocket)
+                        print(f"WebSocket client authenticated: {user_id}")
+                    else:
+                        await manager.send_personal_message(json.dumps({"type": "auth_fail", "error": "Invalid token"}), websocket)
+                        print("WebSocket client failed authentication.")
+                        # Optionally break or close connection here
+                        # break 
+                
+                elif message_type == "join":
+                    if not authenticated:
+                        await manager.send_personal_message(json.dumps({"type": "join_fail", "error": "Not authenticated"}), websocket)
+                        continue
+                    
+                    room = message.get("room")
+                    if room:
+                        current_room = room # Set the current room (patient_id)
+                        # Conceptually add user to room manager if needed for broadcasting later
+                        # await manager.add_user_to_room(user_id, room, websocket) 
+                        await manager.send_personal_message(json.dumps({"type": "join_ok", "room": room}), websocket)
+                        print(f"WebSocket client {user_id} joined room: {room}")
+                    else:
+                         await manager.send_personal_message(json.dumps({"type": "join_fail", "error": "Room not specified"}), websocket)
+
+                elif authenticated and current_room: 
+                    # Assume other messages are prompts if authenticated and in a room
+                    prompt_text = message.get("prompt") # Assuming prompt comes in a 'prompt' field
+                    if not prompt_text:
+                         # Handle cases where the message isn't a prompt structure
+                         await manager.send_personal_message(json.dumps({"type": "error", "message": "Invalid message format or missing 'prompt' field."}), websocket)
+                         continue
+
+                    print(f"Received prompt via WebSocket from {user_id} for room {current_room}: {prompt_text[:50]}...")
+                    
+                    # Process the prompt using the orchestrator
+                    patient_data = mock_patient_data_dict.get(current_room)
+                    if not patient_data:
+                        await manager.send_personal_message(json.dumps({"type": "error", "message": f"Patient data not found for room {current_room}"}), websocket)
+                        continue
+
+                    try:
+                        # Send status update: Processing
+                        await manager.send_personal_message(json.dumps({"type": "status", "message": "Processing prompt..."}), websocket)
+
+                        result = await orchestrator.handle_prompt(
+                            prompt=prompt_text,
+                            patient_id=current_room,
+                            patient_data=patient_data
+                        )
+                        # Send the result back
+                        await manager.send_personal_message(json.dumps({"type": "prompt_result", "result": result}), websocket)
+                        print(f"Sent prompt result to {user_id} for room {current_room}")
+
+                    except Exception as e:
+                        print(f"Error processing prompt via WebSocket for {user_id} room {current_room}: {e}")
+                        await manager.send_personal_message(json.dumps({"type": "error", "message": f"Failed to process prompt: {e}"}), websocket)
+
+                else:
+                     # Not authenticated or not joined a room
+                    await manager.send_personal_message(json.dumps({"type": "error", "message": "Please authenticate and join a room first."}), websocket)
+
+
+            except json.JSONDecodeError:
+                print("Received non-JSON WebSocket message.")
+                await manager.send_personal_message(json.dumps({"type": "error", "message": "Invalid JSON format"}), websocket)
+            except Exception as e:
+                 # Catch broader exceptions during message handling
+                 print(f"Error handling WebSocket message: {e}")
+                 await manager.send_personal_message(json.dumps({"type": "error", "message": f"Internal server error: {e}"}), websocket)
+
+
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        print(f"WebSocket client disconnected: {user_id if user_id else 'Unknown'}")
+    except Exception as e:
+        # Catch errors during the main accept/receive loop
+        print(f"WebSocket connection error: {e}")
+        manager.disconnect(websocket) # Ensure disconnect on error
+
+
+# --- Health Check/Root Endpoint ---
 @app.get("/")
 async def read_root():
-    return {"message": "AI Cancer Care CoPilot Backend"}
+    return {"message": "AI Cancer Care CoPilot Backend is running."}
 
-if __name__ == "__main__":
-    # For development, run using: uvicorn main:app --reload --port 8000
-    # (Assuming you are in the 'backend' directory)
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+# Optional: Add logic to run the server if the script is executed directly
+# if __name__ == "__main__":
+#     import uvicorn
+#     uvicorn.run(app, host="0.0.0.0", port=8000) 

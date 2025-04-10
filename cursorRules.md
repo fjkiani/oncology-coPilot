@@ -118,7 +118,7 @@ Phase 1: Core Infrastructure & AI Foundation (MVP Focus - Mock Integration/Archi
   | - Prompt UI     |     |  + Orchestrator +   |
   | - Role-Hinted   |     |  | Logic to Route  |   |  (Identifies Needs & Routes
   |   Action Btns   |     |  | to Role/Agent   |   |   to appropriate Role's
-  |   (Placeholders)|     |  +--------------+   |
+   |   (Placeholders)|     |  +--------------+   |
                           |         v           |
                           | +-------+---------+ |
                           | | AI Analysis     | |  (e.g., Gemini via Vertex AI
@@ -181,6 +181,7 @@ Phase 2: Advanced AI Capabilities, Agent Implementation & Workflow Integration
   [X] Implement `ReferralAgent` & Integrate with Mock/Test Referral System/Tool.
   [X] Implement `SideEffectAgent` (Mock data identification & management tips).
   [X] Implement `ClinicalTrialAgent` (Mock data search based on condition).
+  [X] Implement WebSocket Communication (Backend Endpoint & Frontend Integration)
   [ ] Research & Integrate/Fine-tune Specialized Cancer Analysis Models (Beyond Summarization)
   [ ] Refine Prompt Interface for complex, multi-step agent tasks
   [ ] Enhance UI/UX for agent interaction and task management (status, approvals)
@@ -228,6 +229,7 @@ Key Challenges:
 *   **Human-in-the-Loop Design:** Creating effective and non-intrusive clinician review/approval steps.
 
 Lessons & Design Principles:
+*   **Verify File Existence:** Verify the existence of relevant files/hooks (e.g., `useWebSocket.js`) across the project structure before concluding they are missing, even if not immediately visible in the primary component being edited.
 *   Use Gemini via Vertex AI for foundational HIPAA-compliant LLM tasks.
 *   Employ a multi-model AI strategy (General + Specialized).
 *   Prioritize HIPAA compliance in all architectural decisions.
