@@ -16,7 +16,7 @@ The primary technology enabling real-time, bidirectional communication between t
 
 *   **Why WebSockets?** They provide a persistent connection, allowing the server to push data (like new messages or alerts) to clients instantly without the client needing to constantly poll for updates. This is efficient and provides a truly real-time experience.
 *   **WebSockets:** Provide the real-time transport layer.
-*   **Conceptual Graph Model:** Represent entities (Patients, Doctors, Consultations, Messages, Data Points, Agents, Conditions, Meds) as nodes and their interactions/relationships as edges. This captures the crucial **lineage** and context.
+*   **Conceptual Graph Model:** Represent entities (Psatients, Doctors, Consultations, Messages, Data Points, Agents, Conditions, Meds) as nodes and their interactions/relationships as edges. This captures the crucial **lineage** and context.
 
 ## Architectural Components
 
