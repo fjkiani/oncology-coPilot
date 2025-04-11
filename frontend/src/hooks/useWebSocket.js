@@ -27,16 +27,17 @@ const useWebSocket = (url, authToken, roomToJoin) => {
 
     ws.current.onopen = () => {
       console.log('WebSocket Connected');
-      // Send authentication message immediately upon connection
       if (authToken) {
-        console.log('Sending auth token...');
-        const authMsg = JSON.stringify({ type: 'auth', token: authToken });
+        console.log(`Sending auth token and initial room/patientId: ${roomToJoin}`);
+        const authPayload = { 
+            type: 'auth', 
+            token: authToken,
+            patientId: roomToJoin // Use roomToJoin as the patientId for auto-join
+        };
+        const authMsg = JSON.stringify(authPayload);
         ws.current?.send(authMsg);
       } else {
         console.warn('No auth token provided for WebSocket connection.');
-        // Optionally close connection if auth is strictly required
-        // ws.current?.close(); 
-        // setError(new Error('Authentication token required.'));
       }
     };
 
@@ -45,11 +46,10 @@ const useWebSocket = (url, authToken, roomToJoin) => {
       setIsConnected(false);
       setIsAuthenticated(false);
       setIsInRoom(false);
-      // Optionally set an error or attempt reconnect based on close code
-      if (event.code !== 1000) { // 1000 is normal closure
+      if (event.code !== 1000) { 
           setError(new Error(`WebSocket closed unexpectedly: ${event.code} ${event.reason || ''}`.trim()));
       }
-      ws.current = null; // Clean up ref on close
+      ws.current = null; 
     };
 
     ws.current.onerror = (err) => {
@@ -58,7 +58,6 @@ const useWebSocket = (url, authToken, roomToJoin) => {
       setIsConnected(false);
       setIsAuthenticated(false);
       setIsInRoom(false);
-      // ws.current?.close(); // Ensure closed on error
        ws.current = null;
     };
 
@@ -67,39 +66,41 @@ const useWebSocket = (url, authToken, roomToJoin) => {
         const message = JSON.parse(event.data);
         console.log("WebSocket Message Received:", message);
 
-        // Handle backend confirmation messages
-        if (message.type === 'auth_ok') {
+        if (message.type === 'auth_success') {
           console.log('WebSocket Authentication successful');
           setIsAuthenticated(true);
-          // Now attempt to join the room if specified
           if (roomToJoin) {
-            console.log(`Attempting to join room: ${roomToJoin}`);
-            const joinMsg = JSON.stringify({ type: 'join', room: roomToJoin });
-            ws.current?.send(joinMsg);
+              console.log(`Authentication successful, assuming auto-join to room: ${roomToJoin}`);
+              setIsInRoom(true);
+              setIsConnected(true); // Consider connected after successful auth & implied join
           } else {
-             // If no room needed, consider connection ready after auth
-             setIsInRoom(true); // Or adjust logic if room is mandatory
-             setIsConnected(true);
+               console.log('Authentication successful, but no specific room to join.');
+               setIsConnected(true); 
           }
         } else if (message.type === 'auth_fail') {
-          console.error('WebSocket Authentication failed:', message.error);
-          setError(new Error(`Authentication failed: ${message.error}`));
-          ws.current?.close(); // Close connection on auth failure
-        } else if (message.type === 'join_ok') {
-          console.log(`Successfully joined room: ${message.room}`);
-          setIsInRoom(true);
-          setIsConnected(true); // Connection is fully ready (auth + room)
-        } else if (message.type === 'join_fail') {
-           console.error('WebSocket room join failed:', message.error);
-           setError(new Error(`Failed to join room: ${message.error}`));
-           ws.current?.close(); // Close connection on join failure
+          console.error('WebSocket Authentication failed:', message.message);
+          setError(new Error(`Authentication failed: ${message.message}`));
+          setIsAuthenticated(false);
+          setIsConnected(false);
+          ws.current?.close(1008, "Authentication Failed"); // Close connection on auth failure
+        } else if (message.type === 'status' && message.message?.startsWith('Joined room')) {
+             const joinedRoomId = message.message.split(' ').pop();
+             console.log(`Successfully joined room: ${joinedRoomId}`);
+             if (joinedRoomId === roomToJoin) {
+                 setIsInRoom(true);
+                 setIsConnected(true); 
+             } else {
+                 console.warn(`Joined a different room (${joinedRoomId}) than initially specified (${roomToJoin})`);
+             }
+        } else if (message.type === 'error') {
+            console.error('Received error message from WebSocket:', message.message);
+            setError(new Error(`Server error: ${message.message}`));
         } else {
-           // Handle other message types (e.g., regular chat messages)
            setLastMessage(message);
         }
+
       } catch (e) {
         console.error("Failed to parse WebSocket message or handle message:", e, "Raw data:", event.data);
-        // Handle non-JSON messages or parsing errors if necessary
       }
     };
 
@@ -107,15 +108,31 @@ const useWebSocket = (url, authToken, roomToJoin) => {
 
   // Effect to establish connection on mount or when dependencies change
   useEffect(() => {
-    if (url && authToken && roomToJoin) { // Only connect if params are provided
+    // Ensure all required parameters are present before attempting connection
+    if (url && authToken && roomToJoin) { 
+        console.log(`[useWebSocket Effect] Dependencies met, attempting connect for room: ${roomToJoin}, url: ${url}`);
         connect();
+    } else {
+        // Log why connection is not attempted
+        console.log(`[useWebSocket Effect] Skipping connection attempt. url: ${!!url}, authToken: ${!!authToken}, roomToJoin: ${!!roomToJoin}`);
+        // Ensure connection is closed if params become invalid while connected
+        if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+            console.log("[useWebSocket Effect] Closing existing connection due to invalid parameters.");
+            ws.current.close(1000, "Invalid parameters");
+            ws.current = null; // Clear ref
+             // Reset state explicitly when params become invalid
+            setIsConnected(false);
+            setIsAuthenticated(false);
+            setIsInRoom(false);
+            setError(null);
+        }
     }
     
-    // Cleanup function to close WebSocket connection on unmount
+    // Cleanup function to close WebSocket connection on unmount or before re-running effect
     return () => {
       if (ws.current) {
-        console.log("Closing WebSocket connection on unmount.");
-        ws.current.close(1000, "Component unmounting"); // Normal closure
+        console.log(`[useWebSocket Cleanup] Closing WebSocket connection for room: ${roomToJoin}`);
+        ws.current.close(1000, "Component unmounting or parameters changed"); // Normal closure
         ws.current = null;
       }
     };
@@ -123,19 +140,19 @@ const useWebSocket = (url, authToken, roomToJoin) => {
 
   // Function to send messages
   const sendMessage = useCallback((message) => {
-    if (ws.current && ws.current.readyState === WebSocket.OPEN && isConnected) {
-        // Ensure message is stringified if it's an object
+    const readyToSend = ws.current && ws.current.readyState === WebSocket.OPEN && isConnected && isAuthenticated && isInRoom;
+    if (readyToSend) {
         const messageToSend = typeof message === 'string' ? message : JSON.stringify(message);
         console.log("Sending WebSocket Message:", messageToSend);
         ws.current.send(messageToSend);
     } else {
-      console.error('WebSocket is not connected or ready.');
-      // Optionally queue message or show error to user
+      console.error(`WebSocket is not ready to send. State: connected=${isConnected}, authenticated=${isAuthenticated}, inRoom=${isInRoom}, readyState=${ws.current?.readyState}`);
+      setError(new Error("Connection not fully established. Cannot send message."));
     }
-  }, [isConnected]); // isConnected dependency ensures we don't send if not ready
+  }, [isConnected, isAuthenticated, isInRoom]); // Depend on all state parts
 
   return { 
-      isConnected: isConnected && isAuthenticated && isInRoom, // Define "ready" state
+      isConnected: isConnected && isAuthenticated && isInRoom, // Combined readiness state
       lastMessage, 
       sendMessage, 
       error,

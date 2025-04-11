@@ -5,7 +5,7 @@ import json
 import os
 from dotenv import load_dotenv # Import load_dotenv
 import asyncio # Import asyncio if not already present
-from typing import Optional # <-- Import Optional for type hinting
+from typing import Optional, List, Dict, Any # <-- Import Optional, List, Dict, Any for type hinting
 # Placeholder for future Python-based AI utils
 # from . import ai_utils 
 
@@ -16,6 +16,9 @@ load_dotenv()
 from core.orchestrator import AgentOrchestrator
 from core.blockchain_utils import record_contribution # <-- Import the new function
 from core.connection_manager import manager # <-- Import the connection manager
+# Assume a utility exists or can be created to call LLM directly
+# We might need to create this file/function based on existing agent logic
+from core.llm_utils import get_llm_text_response 
 
 app = FastAPI()
 
@@ -160,13 +163,15 @@ mock_patient_data_dict = {
 # In a real app, this would involve JWT decoding, session checking, etc.
 async def authenticate_websocket_token(token: str) -> Optional[str]:
     """Placeholder function to validate a token from WebSocket."""
-    print(f"Attempting to authenticate token: {token[:10]}...")
-    # Dummy validation: Check if token is not empty and maybe has a prefix
-    if token and token.startswith("valid_token_"):
-        user_id = token.split("_")[-1] # Extract dummy user ID
-        print(f"Token validated successfully for user: {user_id}")
-        return user_id
-    print("Token validation failed.")
+    print(f"Attempting to authenticate token: {token[:20]}...") # Log more of the token
+    # Dummy validation: Check if token is not empty and has the correct prefix
+    prefix = "valid_token_"
+    if token and token.startswith(prefix):
+        user_id = token[len(prefix):] # Extract the part AFTER the prefix
+        if user_id: # Ensure we extracted something
+             print(f"Token validated successfully for user: {user_id}")
+             return user_id
+    print(f"Token validation failed for token: {token[:20]}...")
     return None
 # --- End Placeholder --- 
 
@@ -252,111 +257,401 @@ async def handle_feedback(patient_id: str, request: FeedbackRequest):
         print(f"Error handling feedback: {e}")
         raise HTTPException(status_code=500, detail=f"An internal error occurred while processing feedback: {e}")
 
+# --- Helper Functions for Consultation Initiation (Revised) ---
+
+async def _gather_included_data(patient_id: str, include_options: Dict[str, bool]) -> Dict[str, Any]:
+    """
+    Gathers specified sections of patient data based on the include_options dict.
+    """
+    print(f"[Data Gathering] Starting for {patient_id} with options: {include_options}")
+    related_info = {}
+    patient_data = mock_patient_data_dict.get(patient_id)
+    if not patient_data:
+        print(f"[Data Gathering] Patient {patient_id} not found.")
+        return related_info
+
+    # Map include_options keys to mock_patient_data keys and desired format
+    data_map = {
+        "includeLabs": ("recentLabs", "Recent Labs"),
+        "includeMeds": ("currentMedications", "Current Medications"),
+        "includeHistory": ("medicalHistory", "Medical History"),
+        "includeNotes": ("notes", "Recent Notes"), # Maybe limit notes? e.g., [:2]
+        "includeDiagnosis": ("diagnosis", "Diagnosis"),
+        # Add more mappings as needed (e.g., imaging)
+    }
+
+    for option_key, (data_key, display_key) in data_map.items():
+        if include_options.get(option_key, False): # Check if the option is True
+            data_section = patient_data.get(data_key)
+            if data_section:
+                # Simple implementation: Add the whole section. 
+                # Could refine later (e.g., only recent notes/labs)
+                if data_key == "notes":
+                     related_info[display_key] = data_section[:2] # Limit notes
+                else:
+                    related_info[display_key] = data_section
+                print(f"[Data Gathering] Included '{display_key}'")
+            else:
+                 print(f"[Data Gathering] Section '{display_key}' requested but not found/empty.")
+
+    print(f"[Data Gathering] Completed. Included sections: {related_info.keys()}")
+    return related_info
+
+async def _generate_consult_focus(patient_id: str, topic: str, related_info: Dict[str, Any], initiator_note: Optional[str]) -> str:
+    """Generates the AI focus statement using LLM based on topic, included data, and note."""
+    print(f"[Focus Generation] Starting for {patient_id} based on topic: '{topic[:50]}...'")
+    patient_name = mock_patient_data_dict.get(patient_id, {}).get('demographics', {}).get('name', 'the patient')
+    
+    prompt = f"Patient: {patient_name} ({patient_id})\n"
+    prompt += f"Consultation Topic/Reason: {topic}\n"
+    
+    if initiator_note:
+        prompt += f"Initiator Note: {initiator_note}\n"
+    
+    prompt += "\nSelected Patient Context Provided:\n"
+    if not related_info:
+        prompt += "- None provided beyond the topic.\n"
+    else:
+        # Format included data concisely for the prompt
+        for key, value in related_info.items():
+            # Basic summarization/truncation for prompt clarity
+            if isinstance(value, list) and len(value) > 3:
+                 prompt += f"- {key}: (Showing first 3 of {len(value)}) {json.dumps(value[:3], indent=1)}\n"
+            elif isinstance(value, list) and not value:
+                 prompt += f"- {key}: None\n"
+            else:
+                prompt += f"- {key}: {json.dumps(value, indent=1)}\n" 
+            
+    prompt += "\nPlease synthesize the above into a concise 'Consult Focus' statement (1-2 sentences). "
+    prompt += "This statement should guide the consulting physician on the likely key question or area needing discussion, considering the topic, the provided context sections, and any initiator notes."
+    
+    print(f"[Focus Generation] Prompting LLM:\n{prompt[:500]}...")
+    
+    try:
+        focus_statement = await get_llm_text_response(prompt)
+        print(f"[Focus Generation] LLM Response received: {focus_statement[:100]}...")
+        return focus_statement if focus_statement else "AI could not generate a focus statement."
+    except Exception as e:
+        print(f"[Focus Generation] Error calling LLM: {e}")
+        return f"Error generating AI focus statement: {e}"
+
 # --- WebSocket Endpoint ---
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    client_host = websocket.client.host
+    client_port = websocket.client.port
+    print(f"WebSocket connection attempt from: {client_host}:{client_port}")
     await manager.connect(websocket)
-    authenticated = False
-    user_id = None
-    current_room = None # Store the patient_id the user joined
+    authenticated_user_id = None
+    current_room = None # Track the room this socket has joined
 
     try:
         while True:
-            data = await websocket.receive_text()
-            try:
-                message = json.loads(data)
-                message_type = message.get("type")
+            data_text = await websocket.receive_text()
+            data = json.loads(data_text)
+            message_type = data.get("type")
+            print(f"Received WS message type: {message_type} from {authenticated_user_id or f'{client_host}:{client_port}'}")
 
-                if message_type == "auth":
-                    token = message.get("token")
-                    user_id = await authenticate_websocket_token(token)
-                    if user_id:
-                        authenticated = True
-                        await manager.send_personal_message(json.dumps({"type": "auth_ok", "user_id": user_id}), websocket)
-                        print(f"WebSocket client authenticated: {user_id}")
-                    else:
-                        await manager.send_personal_message(json.dumps({"type": "auth_fail", "error": "Invalid token"}), websocket)
-                        print("WebSocket client failed authentication.")
-                        # Optionally break or close connection here
-                        # break 
+            if message_type == "auth":
+                token = data.get("token")
+                user_id = await authenticate_websocket_token(token)
+                if user_id:
+                    authenticated_user_id = user_id
+                    await manager.associate_user(user_id, websocket)
+                    await manager.send_personal_message({"type": "auth_success", "message": f"Authenticated as {user_id}"}, websocket)
+                    print(f"User {user_id} authenticated for WebSocket connection from {client_host}:{client_port}")
+                    # Optionally auto-join a default room if needed, e.g., patient room
+                    patient_id_from_token = data.get("patientId") # Assuming client sends patientId with auth
+                    if patient_id_from_token:
+                        await manager.join_room(patient_id_from_token, websocket)
+                        current_room = patient_id_from_token # Track joined room
+                        print(f"User {user_id} auto-joined room: {patient_id_from_token}")
+                else:
+                    await manager.send_personal_message({"type": "auth_fail", "message": "Invalid token"}, websocket)
+                    # Keep connection open but unauthenticated, or disconnect?
+                    # For now, let's disconnect if auth fails
+                    print(f"Authentication failed for WebSocket from {client_host}:{client_port}. Disconnecting.")
+                    await websocket.close(code=1008) # Policy Violation
+                    manager.disconnect(websocket) # Ensure manager knows
+                    break # Exit the loop after closing
+
+            # --- All subsequent actions require authentication ---
+            elif not authenticated_user_id:
+                print(f"WS message ignored from unauthenticated connection {client_host}:{client_port}")
+                await manager.send_personal_message({"type": "error", "message": "Authentication required"}, websocket)
+                continue # Ignore message, wait for auth
+
+            elif message_type == "join":
+                room_id = data.get("roomId")
+                if room_id:
+                    await manager.join_room(room_id, websocket)
+                    current_room = room_id
+                    await manager.send_personal_message({"type": "status", "message": f"Joined room {room_id}"}, websocket)
+                    print(f"User {authenticated_user_id} explicitly joined room: {room_id}")
+                else:
+                     await manager.send_personal_message({"type": "error", "message": "Room ID missing for join request"}, websocket)
+
+            elif message_type == "prompt":
+                if not current_room:
+                    await manager.send_personal_message({"type": "error", "message": "Cannot process prompt: Not in a room."}, websocket)
+                    continue
+                    
+                prompt_text = data.get("prompt")
+                # Assuming room ID often corresponds to patient ID for general prompts
+                patient_id_for_prompt = current_room 
+                patient_data = mock_patient_data_dict.get(patient_id_for_prompt)
+
+                if not patient_data:
+                     await manager.send_personal_message({"type": "error", "message": f"Patient data not found for ID: {patient_id_for_prompt}"}, websocket)
+                     continue
+                if not prompt_text:
+                     await manager.send_personal_message({"type": "error", "message": "Prompt cannot be empty."}, websocket)
+                     continue
+
+                try:
+                    print(f"Processing prompt '{prompt_text[:50]}...' for patient {patient_id_for_prompt} in room {current_room}")
+                    result = await orchestrator.handle_prompt(
+                        prompt=prompt_text,
+                        patient_id=patient_id_for_prompt,
+                        patient_data=patient_data
+                    )
+                    await manager.send_personal_message({"type": "prompt_result", "result": result}, websocket)
+                except Exception as e:
+                    print(f"Error processing prompt via WebSocket: {e}")
+                    await manager.send_personal_message({"type": "error", "message": f"Error processing prompt: {e}"}, websocket)
+
+            elif message_type == "initiate_consult":
+                # --- Updated Initiate Consult Logic --- 
+                target_user_id = data.get("targetUserId")
+                patient_id = data.get("patientId")
+                initiator_info = data.get("initiator")
+                room_id = data.get("roomId")
+                context_data = data.get("context")
+
+                if not all([target_user_id, patient_id, initiator_info, room_id, context_data]):
+                    print("Initiate consult failed: Missing parameters")
+                    await manager.send_personal_message({"type": "initiate_fail", "roomId": room_id, "error": "Missing required parameters"}, websocket)
+                    continue
                 
-                elif message_type == "join":
-                    if not authenticated:
-                        await manager.send_personal_message(json.dumps({"type": "join_fail", "error": "Not authenticated"}), websocket)
-                        continue
-                    
-                    room = message.get("room")
-                    if room:
-                        current_room = room # Set the current room (patient_id)
-                        # Conceptually add user to room manager if needed for broadcasting later
-                        # await manager.add_user_to_room(user_id, room, websocket) 
-                        await manager.send_personal_message(json.dumps({"type": "join_ok", "room": room}), websocket)
-                        print(f"WebSocket client {user_id} joined room: {room}")
-                    else:
-                         await manager.send_personal_message(json.dumps({"type": "join_fail", "error": "Room not specified"}), websocket)
+                # Extract data based on the revised payload structure
+                initial_trigger = context_data.get("initialTrigger") # Contains { description: "..." }
+                include_options = context_data.get("includeOptions", {}) # Dict of bools
+                use_ai = context_data.get("useAI", False) 
+                initiator_note = context_data.get("initiatorNote")
+                topic_description = initial_trigger.get("description", "General Consultation")
 
-                elif authenticated and current_room: 
-                    # Assume other messages are prompts if authenticated and in a room
-                    prompt_text = message.get("prompt") # Assuming prompt comes in a 'prompt' field
-                    if not prompt_text:
-                         # Handle cases where the message isn't a prompt structure
-                         await manager.send_personal_message(json.dumps({"type": "error", "message": "Invalid message format or missing 'prompt' field."}), websocket)
-                         continue
+                print(f"Initiating consult from {initiator_info['id']} to {target_user_id} for patient {patient_id} in room {room_id}.")
+                print(f"Topic: '{topic_description[:50]}...', Include Options: {include_options}, AI Assist: {use_ai}")
+                if initiator_note: print(f"Initiator Note: {initiator_note[:50]}...")
 
-                    print(f"Received prompt via WebSocket from {user_id} for room {current_room}: {prompt_text[:50]}...")
-                    
-                    # Process the prompt using the orchestrator
-                    patient_data = mock_patient_data_dict.get(current_room)
-                    if not patient_data:
-                        await manager.send_personal_message(json.dumps({"type": "error", "message": f"Patient data not found for room {current_room}"}), websocket)
-                        continue
+                # --- Prepare context to send to target user --- 
+                related_info = None
+                focus_statement = None
+                
+                try:
+                    # 1. Gather included data based on checkboxes (always happens)
+                    related_info = await _gather_included_data(patient_id, include_options)
+                except Exception as gather_ex:
+                     print(f"Error during data gathering: {gather_ex}")
+                     related_info = {"error": f"Could not gather context data: {gather_ex}"}
 
+                if use_ai:
                     try:
-                        # Send status update: Processing
-                        await manager.send_personal_message(json.dumps({"type": "status", "message": "Processing prompt..."}), websocket)
+                        # 2. Generate focus statement using LLM (only if useAI is true)
+                        focus_statement = await _generate_consult_focus(patient_id, topic_description, related_info or {}, initiator_note)
+                    except Exception as focus_ex:
+                        print(f"Error during AI focus generation: {focus_ex}")
+                        focus_statement = f"AI Error: Could not generate focus ({focus_ex})"
 
+                # Construct the final context payload for the recipient
+                context_to_send = {
+                    "initialTrigger": initial_trigger, # Keep the original trigger/topic info
+                    "initiatorNote": initiator_note,
+                    "useAI": use_ai, # Let recipient know if AI was involved
+                    "relatedInfo": related_info, # The data gathered based on checkboxes
+                    "consultFocusStatement": focus_statement if use_ai else None # Only include if AI was used
+                }
+
+                # --- Find target user socket(s) and send --- 
+                target_sockets = await manager.get_user_sockets(target_user_id)
+                if target_sockets:
+                    message_to_target = {
+                        "type": "consult_request",
+                        "roomId": room_id,
+                        "patientId": patient_id,
+                        "initiator": initiator_info,
+                        "context": context_to_send # Send the processed context
+                    }
+                    sent_count = 0
+                    for target_socket in target_sockets:
+                        try:
+                            # Use manager's method which now handles serialization
+                            await manager.send_personal_message(message_to_target, target_socket)
+                            sent_count += 1
+                        except Exception as e:
+                             print(f"Error sending consult_request to a socket for {target_user_id}: {e}")
+                             
+                    if sent_count > 0:
+                        print(f"Successfully sent consult request for room {room_id} to {sent_count} socket(s) for user {target_user_id}")
+                        await manager.send_personal_message({"type": "initiate_ok", "roomId": room_id}, websocket)
+                    else:
+                         print(f"Failed sending consult_request to any socket for {target_user_id}")
+                         await manager.send_personal_message({"type": "initiate_fail", "roomId": room_id, "error": "Failed to send message to colleague's active sessions"}, websocket)
+                else:
+                    print(f"Target user {target_user_id} not found or not connected.")
+                    await manager.send_personal_message({"type": "initiate_fail", "roomId": room_id, "error": "Colleague is not currently connected"}, websocket)
+
+            elif message_type == "chat_message":
+                room_id = data.get("roomId")
+                message_content = data.get("content")
+                sender_info = data.get("sender") # {id: ..., name: ...}
+                if room_id and message_content and sender_info:
+                    # Add timestamp on the server
+                    timestamp = asyncio.get_event_loop().time() 
+                    chat_payload = {
+                        "type": "chat_message",
+                        "roomId": room_id,
+                        "content": message_content,
+                        "sender": sender_info,
+                        "timestamp": timestamp
+                    }
+                    print(f"Broadcasting chat message in room {room_id} from {sender_info['id']}")
+                    await manager.broadcast_to_room(room_id, chat_payload, exclude_sender=websocket)
+                    # Also send back to sender for confirmation/display
+                    await manager.send_personal_message(chat_payload, websocket)
+                else:
+                    await manager.send_personal_message({"type": "error", "message": "Missing fields for chat message"}, websocket)
+
+            elif message_type == "agent_command":
+                room_id = data.get("roomId")
+                command = data.get("command")
+                command_context = data.get("context", {}) # Optional extra context
+                sender_info = data.get("sender")
+                patient_id_for_command = data.get("patientId") # Expect patientId for context
+
+                if not all([room_id, command, sender_info, patient_id_for_command]):
+                    await manager.send_personal_message({"type": "error", "message": "Missing fields for agent command"}, websocket)
+                    continue
+                    
+                print(f"Processing agent command '{command}' in room {room_id} from {sender_info['id']} for patient {patient_id_for_command}")
+                
+                # Send an acknowledgement back to the sender that the command is being processed
+                await manager.send_personal_message({
+                    "type": "system_message",
+                    "roomId": room_id,
+                    "content": f"Processing command: {command}..."
+                }, websocket)
+                
+                agent_result = None
+                error_message = None
+                
+                try:
+                    patient_data = mock_patient_data_dict.get(patient_id_for_command)
+                    if not patient_data:
+                        raise ValueError(f"Patient data not found for ID: {patient_id_for_command}")
+
+                    # --- Route command to appropriate AI logic --- 
+                    if command == "summarize":
+                        # Use orchestrator for summarization intent
                         result = await orchestrator.handle_prompt(
-                            prompt=prompt_text,
-                            patient_id=current_room,
+                            prompt="Generate a clinical summary", # Standardized prompt
+                            patient_id=patient_id_for_command,
                             patient_data=patient_data
                         )
-                        # Send the result back
-                        await manager.send_personal_message(json.dumps({"type": "prompt_result", "result": result}), websocket)
-                        print(f"Sent prompt result to {user_id} for room {current_room}")
+                        # Extract relevant part of the result
+                        agent_result = result.get('output', {}).get('summary_text')
+                        if not agent_result: agent_result = result.get('summary', 'Summary could not be generated.')
+                        
+                    elif command == "check_interactions":
+                        # Construct a direct LLM prompt
+                        med_list = "\n".join([f"- {med['name']} {med['dosage']}" for med in patient_data.get('currentMedications', [])])
+                        allergy_list = "\n".join([f"- {allergy['substance']}" for allergy in patient_data.get('allergies', [])])
+                        prompt = (
+                            f"Patient: {patient_data['demographics']['name']}\n"
+                            f"Current Medications:\n{med_list or '- None'}\n"
+                            f"Known Allergies:\n{allergy_list or '- None'}\n\n"
+                            f"Please check for potential drug-drug interactions, drug-allergy interactions, "
+                            f"and any significant contraindications based ONLY on the provided medication and allergy lists. "
+                            f"Focus on clinically significant interactions. Format as a concise list."
+                        )
+                        agent_result = await get_llm_text_response(prompt)
+                    
+                    # Add elif for other commands (e.g., side_effects) here...
+                    elif command == "review_side_effects":
+                         # Use orchestrator for side effects intent
+                        result = await orchestrator.handle_prompt(
+                            prompt="What are the potential side effects and management tips?", # Example prompt
+                            patient_id=patient_id_for_command,
+                            patient_data=patient_data
+                        )
+                        # Format the result more nicely
+                        output = result.get('output', {})
+                        side_effects = "\n".join([f"- {se}" for se in output.get('potential_side_effects', [])])
+                        management = "\n".join([f"- {tip['symptom']}: {tip['tip']}" for tip in output.get('management_tips', [])])
+                        agent_result = f"Potential Side Effects:\n{side_effects or '- None identified'}\n\nManagement Tips:\n{management or '- None provided'}"
+                        if not agent_result: agent_result = result.get('summary', 'Could not retrieve side effect info.')
 
-                    except Exception as e:
-                        print(f"Error processing prompt via WebSocket for {user_id} room {current_room}: {e}")
-                        await manager.send_personal_message(json.dumps({"type": "error", "message": f"Failed to process prompt: {e}"}), websocket)
-
+                    else:
+                        error_message = f"Unknown agent command: {command}"
+                        
+                except Exception as e:
+                    print(f"Error processing agent command '{command}': {e}")
+                    error_message = f"Error during '{command}': {e}"
+                    
+                # --- Broadcast result or error to the room --- 
+                if error_message:
+                    response_payload = {
+                        "type": "system_message",
+                        "roomId": room_id,
+                        "content": error_message,
+                        "isError": True
+                    }
                 else:
-                     # Not authenticated or not joined a room
-                    await manager.send_personal_message(json.dumps({"type": "error", "message": "Please authenticate and join a room first."}), websocket)
+                    response_payload = {
+                        "type": "agent_result",
+                        "roomId": room_id,
+                        "command": command,
+                        "result": agent_result or "No result generated.", # Ensure result is not None
+                        "senderIsAgent": True # Flag for UI styling
+                    }
+                    
+                print(f"Broadcasting agent result/error for command '{command}' in room {room_id}")
+                await manager.broadcast_to_room(room_id, response_payload)
 
+            else:
+                print(f"Unknown message type received: {message_type}")
+                # Optionally send an error back
+                await manager.send_personal_message({"type": "error", "message": f"Unsupported message type: {message_type}"}, websocket)
 
-            except json.JSONDecodeError:
-                print("Received non-JSON WebSocket message.")
-                await manager.send_personal_message(json.dumps({"type": "error", "message": "Invalid JSON format"}), websocket)
-            except Exception as e:
-                 # Catch broader exceptions during message handling
-                 print(f"Error handling WebSocket message: {e}")
-                 await manager.send_personal_message(json.dumps({"type": "error", "message": f"Internal server error: {e}"}), websocket)
-
-
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        print(f"WebSocket client disconnected: {user_id if user_id else 'Unknown'}")
+    except WebSocketDisconnect as e:
+        print(f"WebSocket disconnected from {authenticated_user_id or f'{client_host}:{client_port}'} with code: {e.code}")
+        # Optionally log disconnect reason if needed (e.g., e.reason)
     except Exception as e:
-        # Catch errors during the main accept/receive loop
-        print(f"WebSocket connection error: {e}")
-        manager.disconnect(websocket) # Ensure disconnect on error
+        # Catch potential errors during receive/processing
+        print(f"Error in WebSocket connection handler for {authenticated_user_id or f'{client_host}:{client_port}'}: {e}")
+        # Try to close gracefully if possible
+        try:
+            await websocket.close(code=1011) # Internal Error
+        except RuntimeError:
+            pass # Already closed or unable to close
+    finally:
+        # Ensure the connection is removed from the manager on disconnect/error
+        print(f"Cleaning up WebSocket connection for {authenticated_user_id or f'{client_host}:{client_port}'}")
+        manager.disconnect(websocket)
+        if authenticated_user_id and current_room:
+            # Optional: Broadcast a leave message if desired
+            leave_message = {"type": "system_message", "roomId": current_room, "content": f"{authenticated_user_id} left."}
+            # Don't await this, just fire and forget if it fails
+            asyncio.create_task(manager.broadcast_to_room(current_room, leave_message, exclude_sender=websocket))
+            
 
-
-# --- Health Check/Root Endpoint ---
+# Simple root endpoint
 @app.get("/")
 async def read_root():
-    return {"message": "AI Cancer Care CoPilot Backend is running."}
+    return {"message": "Beat Cancer AI Backend is running"}
 
-# Optional: Add logic to run the server if the script is executed directly
-# if __name__ == "__main__":
-#     import uvicorn
-#     uvicorn.run(app, host="0.0.0.0", port=8000) 
+# Add logic to run the app if this script is executed directly
+# (e.g., for development/testing)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000) 

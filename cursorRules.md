@@ -191,6 +191,12 @@ Phase 2: Advanced AI Capabilities, Agent Implementation & Workflow Integration
 Phase 3: Collaboration, Research Platform, Decentralization & Expanded Integrations
   [ ] Design Secure Real-time Collaboration Architecture
   [ ] Implement Doctor-to-Doctor Consultation Features
+      *   Goal: Build a graph-aware consultation system, not just chat.
+      *   Design with **conceptual graph model** for lineage (Patient, Consult, Doctor, Message, Context, Agent Actions).
+      *   Enable **contextual initiation** (link consult to specific data points).
+      *   Support **in-consult agent invocation** (e.g., `/summarize`, `/check-interactions`).
+      *   Lay groundwork for future **GraphRAG** capabilities (complex queries over consultation history/patient graph).
+      *   (See `REALTIME_COLLABORATION.md` for detailed design).
   [ ] Develop Secure, Anonymized/Aggregated Data Sharing for Research (leveraging FL principles)
   [ ] **Implement additional Agents** (e.g., `OrderAgent`, `PharmacyAgent`)
   [ ] **Integrate with Production APIs** (Scheduling, Messaging, EHR Orders, etc. - Requires Partnerships/Access)
