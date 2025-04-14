@@ -10,6 +10,17 @@ const ConsultationPanel = ({
   initialContext, // Optional: e.g., { type: 'lab', id: 'lab123', description: 'Glucose 110 mg/dL' }
   onClose // Function to close the panel
 }) => {
+
+  // --- Add Logging --- 
+  console.log('[ConsultPanel] Rendering with props:', {
+      patientId,
+      consultationRoomId,
+      currentUser,
+      participants,
+      initialContext
+  });
+  // --- End Logging ---
+
   const [newMessage, setNewMessage] = useState('');
   const [messages, setMessages] = useState([]); // Array to hold message objects { senderId, senderName, text, timestamp, type: 'chat'|'agent'|'system' }
   const messagesEndRef = useRef(null); // To scroll to bottom
@@ -26,6 +37,19 @@ const ConsultationPanel = ({
     error: wsError,
     readyState: wsReadyState
   } = useWebSocket(wsUrl, authToken, consultationRoomId); // Pass room ID to useWebSocket hook
+
+  // --- Add Logging --- 
+  useEffect(() => {
+      console.log('[ConsultPanel] WebSocket State:', {
+          url: wsUrl,
+          tokenUsed: authToken,
+          room: consultationRoomId,
+          isConnected: isWsConnected,
+          readyState: wsReadyState,
+          error: wsError
+      });
+  }, [wsUrl, authToken, consultationRoomId, isWsConnected, wsReadyState, wsError]);
+  // --- End Logging ---
 
   // --- Message Handling ---
   useEffect(() => {
@@ -151,13 +175,17 @@ const ConsultationPanel = ({
   const handleSendCommand = useCallback((command, params = {}) => {
       if (!isWsConnected) return;
 
+      // Corrected payload structure to match backend expectations
       const commandToSend = {
         type: 'agent_command', 
-        room: consultationRoomId,
-        senderId: currentUser.id,
-        senderName: currentUser.name, // Send sender info for context/logging
+        roomId: consultationRoomId, // Use roomId
+        sender: {                // Use sender object
+             id: currentUser.id,
+             name: currentUser.name 
+        },
+        patientId: patientId,       // Include patientId
         command: command,
-        params: params, // Include any parameters needed for the command
+        params: params, 
         timestamp: Date.now()
       };
 
@@ -167,6 +195,22 @@ const ConsultationPanel = ({
       // Optional: Add a local system message indicating command was sent?
       // setMessages(prevMessages => [...prevMessages, { type:'system', text:`Command sent: /${command}`, ... }]);
 
+  }, [isWsConnected, sendWsMessage, consultationRoomId, currentUser, patientId]); // Added patientId to dependencies
+
+  // Function to send predefined chat messages
+  const handleSendPredefinedMessage = useCallback((text) => {
+      if (!isWsConnected) return;
+      const messageToSend = {
+          type: 'chat_message',
+          room: consultationRoomId,
+          senderId: currentUser.id,
+          senderName: currentUser.name,
+          text: text, // Use the predefined text
+          timestamp: Date.now()
+      };
+      console.log("Sending predefined chat message:", messageToSend);
+      sendWsMessage(messageToSend);
+      // Optionally add optimistic UI update here if needed
   }, [isWsConnected, sendWsMessage, consultationRoomId, currentUser]);
 
   // Handle Enter key press in input
@@ -194,12 +238,7 @@ const ConsultationPanel = ({
       <div style={{ padding: '10px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
             <h4 style={{ margin: 0, fontSize: '1.1em' }}>Consult: Patient {patientId}</h4>
-             {/* Placeholder for Context Display */}
-             {initialContext && (
-                 <p style={{fontSize: '0.8em', color: '#555', margin: '2px 0 0 0'}}>
-                     Context: {initialContext.description || JSON.stringify(initialContext)}
-                 </p>
-             )}
+             {/* Context display removed - shown in parent component */}
              <p style={{fontSize: '0.8em', color: '#555', margin: '2px 0 0 0'}}>
                  Participants: {currentUser.name}, {participants.map(p => p.name).join(', ')}
              </p>
@@ -245,6 +284,28 @@ const ConsultationPanel = ({
                   <p style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}> 
                       {msg.text}
                   </p>
+                  
+                  {/* --- Contextual Follow-up Actions --- */}
+                  {msg.type === 'agent_result' && msg.command === 'ask_glucose_trend' && (
+                      <div style={{ marginTop: '8px', paddingTop: '5px', borderTop: '1px dashed #ccc' }}>
+                          <p style={{ fontSize: '0.75em', color: '#444', marginBottom: '4px', fontWeight: '500' }}>Follow-up Actions:</p>
+                          <button 
+                              onClick={() => handleSendPredefinedMessage('[System Notification] Dr. B acknowledged glucose trend/A1c. Will continue monitoring.')}
+                              style={contextualButtonStyle}
+                              title="Send acknowledgment message to chat"
+                          >
+                              Acknowledge & Monitor
+                          </button>
+                          <button 
+                              onClick={() => handleSendPredefinedMessage('[System Notification] Dr. B to Dr. A: Glucose trend noted. Thoughts on current management/Metformin?')}
+                              style={{...contextualButtonStyle, marginLeft: '5px'}}
+                              title="Send message to discuss management"
+                          >
+                              Discuss Trend/Meds
+                          </button>
+                      </div>
+                  )}
+                  {/* --- End Contextual Follow-up Actions --- */}
               </div>
             </div>
           );
@@ -252,6 +313,35 @@ const ConsultationPanel = ({
         <div ref={messagesEndRef} /> 
       </div>
       
+      {/* --- Suggested AI Questions --- */}
+      <div style={{ padding: '5px 10px', borderTop: '1px solid #eee' }}>
+          <p style={{ fontSize: '0.8em', color: '#555', marginBottom: '5px', fontWeight: '500' }}>Suggested AI Questions:</p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+              <button 
+                  onClick={() => handleSendCommand('ask_glucose_trend', { question: 'What is the recent glucose trend & last A1c?' })}
+                  disabled={!isWsConnected}
+                  style={suggestedButtonStyle(isWsConnected)}
+              >
+                  Glucose Trend & A1c?
+              </button>
+              <button 
+                  onClick={() => handleSendCommand('ask_letrozole_effect', { question: 'Could Letrozole affect glucose or interact with Metformin?' })}
+                  disabled={!isWsConnected}
+                  style={suggestedButtonStyle(isWsConnected)}
+              >
+                  Letrozole/Glucose Impact?
+              </button>
+               <button 
+                  onClick={() => handleSendCommand('ask_management_recommendations', { question: 'What are standard recommendations for managing this glucose level during cancer treatment?' })}
+                  disabled={!isWsConnected}
+                  style={suggestedButtonStyle(isWsConnected)}
+               >
+                  Management Recommendations?
+              </button>
+          </div>
+      </div>
+      {/* --- End Suggested AI Questions --- */}
+
        {/* Agent/Graph Interaction Buttons */}
        <div style={{ padding: '5px 10px', borderTop: '1px solid #eee', borderBottom: '1px solid #eee', background: '#f0f0f0' }}>
             <span style={{ fontSize: '0.8em', color: '#666' }}>Quick Actions: </span>
@@ -298,6 +388,29 @@ const ConsultationPanel = ({
       </div>
     </div>
   );
+};
+
+// Helper function for button styling to avoid repetition
+const suggestedButtonStyle = (enabled) => ({
+    fontSize: '0.75em',
+    padding: '3px 8px',
+    backgroundColor: enabled ? '#e0e7ff' : '#e5e7eb',
+    color: enabled ? '#3730a3' : '#9ca3af',
+    border: '1px solid #c7d2fe',
+    borderRadius: '4px',
+    cursor: enabled ? 'pointer' : 'not-allowed',
+    opacity: enabled ? 1 : 0.6,
+});
+
+// Helper function for contextual buttons inside messages
+const contextualButtonStyle = {
+    fontSize: '0.7em',
+    padding: '2px 6px',
+    backgroundColor: '#f0f9ff',
+    color: '#075985',
+    border: '1px solid #bae6fd',
+    borderRadius: '4px',
+    cursor: 'pointer',
 };
 
 ConsultationPanel.propTypes = {

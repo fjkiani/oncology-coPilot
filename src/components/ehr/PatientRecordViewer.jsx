@@ -14,6 +14,85 @@ const formatDate = (dateString) => {
   }
 };
 
+// --- Helper Component to Render Included Info in Joining View ---
+const RenderIncludedInfo = ({ relatedInfo }) => {
+  if (!relatedInfo || Object.keys(relatedInfo).length === 0) {
+    return <p className="text-xs italic text-gray-500 mt-2">No specific data sections were included by the initiator.</p>;
+  }
+
+  return (
+    <div className="space-y-3 mt-2">
+      {Object.entries(relatedInfo).map(([key, data]) => {
+        // Handle potential empty data sections
+        if (!data || (Array.isArray(data) && data.length === 0)) {
+             return (
+                <div key={key} className="mb-2 pb-2 border-b last:border-b-0">
+                    <h4 className="text-sm font-semibold text-gray-700 mb-1">{key}</h4>
+                    <p className="text-xs text-gray-500 italic pl-2">None included or available.</p>
+                </div>
+            );
+        }
+
+        return (
+          <div key={key} className="mb-2 pb-2 border-b last:border-b-0">
+            <h4 className="text-sm font-semibold text-gray-700 mb-1">{key}</h4>
+            <div className="pl-2 text-xs space-y-1">
+              {/* --- Specific Rendering based on Key --- */}
+              
+              {key === 'Recent Labs' && Array.isArray(data) && data.map((panel, pIndex) => (
+                 <div key={`panel-${pIndex}`} className="mb-1">
+                     <p className="font-medium text-gray-600">{panel.panelName || 'Lab Panel'} ({formatDate(panel.resultDate)})</p>
+                     <ul className="list-disc list-inside ml-2">
+                         {panel.components?.map((comp, cIndex) => (
+                            <li key={`comp-${cIndex}`}>
+                               {comp.test}: {comp.value} {comp.unit} {comp.flag && comp.flag !== 'Normal' ? <span className='text-red-600 font-semibold'>({comp.flag})</span> : ''}
+                            </li>
+                         ))}
+                     </ul>
+                 </div>
+              ))}
+
+              {key === 'Current Medications' && Array.isArray(data) && data.map((med, mIndex) => (
+                 <p key={`med-${mIndex}`}>{med.name} {med.dosage} - {med.frequency}</p>
+              ))}
+
+              {key === 'Medical History' && Array.isArray(data) && data.map((item, hIndex) => (
+                  // Handle both string history items and potential object structure
+                  <p key={`hist-${hIndex}`}>
+                      {typeof item === 'string' ? item : 
+                      (item.condition ? `${item.condition} (Diagnosed: ${formatDate(item.diagnosisDate)})` : JSON.stringify(item))}
+                  </p>
+              ))}
+
+              {key === 'Recent Notes' && Array.isArray(data) && data.map((note, nIndex) => (
+                 <div key={`note-${nIndex}`} className="border-t first:border-t-0 pt-1 mt-1">
+                    <p className="font-medium text-gray-600">{formatDate(note.date)} - {note.provider || note.author}</p>
+                    <p className="italic text-gray-700 whitespace-pre-wrap">"{note.text?.substring(0, 150) || note.content?.substring(0, 150)}..."</p>
+                 </div>
+              ))}
+
+              {key === 'Diagnosis' && typeof data === 'object' && data !== null && (
+                 <div>
+                    <p><strong>Primary:</strong> {data.primary || data.condition || 'N/A'}</p>
+                    <p><strong>Date:</strong> {formatDate(data.diagnosedDate || data.diagnosisDate)}</p>
+                    <p><strong>Status:</strong> {data.status || 'N/A'}</p>
+                 </div>
+              )}
+              
+               {/* Add more specific renderers for other keys if needed (e.g., Allergies, Imaging) */}
+               {/* Fallback for unhandled data types/keys */}
+               {!['Recent Labs', 'Current Medications', 'Medical History', 'Recent Notes', 'Diagnosis'].includes(key) && (
+                    <pre className="text-xs whitespace-pre-wrap bg-gray-100 p-1 rounded">{JSON.stringify(data, null, 1)}</pre>
+               )}
+
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 const PatientRecordViewer = ({ patientData }) => {
   console.log("[PatientRecordViewer] Rendering..."); // <-- Log 1: Check if component renders
   
@@ -28,7 +107,7 @@ const PatientRecordViewer = ({ patientData }) => {
   const [isConsultPanelOpen, setIsConsultPanelOpen] = useState(false);
   const [currentConsultation, setCurrentConsultation] = useState(null); // { roomId, participants, initialContext }
   const [incomingConsultRequest, setIncomingConsultRequest] = useState(null); // Store request details { roomId, patientId, initiator, context }
-  const [isJoiningConsult, setIsJoiningConsult] = useState(false); // <-- Add state for joining view
+  const [isJoiningConsult, setIsJoiningConsult] = useState(false);
   
   // --- State for Consultation Initiation Options (Revised for Modal Flow) ---
   const [showConsultOptionsModal, setShowConsultOptionsModal] = useState(false);
@@ -43,6 +122,9 @@ const PatientRecordViewer = ({ patientData }) => {
     includeDiagnosis: true,
   });
   const [consultInitiatorNote, setConsultInitiatorNote] = useState("");
+  
+  // --- State for Highlighting Sections --- 
+  const [highlightSections, setHighlightSections] = useState(null); // Stores { includeLabs: true, ... } or null
   
   // --- Determine Current User (for testing purposes) ---
   // Check for userId query parameter to simulate different users
@@ -200,6 +282,7 @@ const PatientRecordViewer = ({ patientData }) => {
     setConsultUseAI(true);
     setConsultIncludeOptions({ includeLabs: true, includeMeds: true, includeHistory: false, includeNotes: false, includeDiagnosis: true });
     setConsultInitiatorNote("");
+    setHighlightSections(null); // Clear any previous highlights when starting new consult
     setShowConsultOptionsModal(true);
   };
 
@@ -264,9 +347,18 @@ const PatientRecordViewer = ({ patientData }) => {
       setIsConsultPanelOpen(false);
       setCurrentConsultation(null);
       setIsJoiningConsult(false);
+      setHighlightSections(null); // Clear highlights when consult panel is closed
   };
   const handleViewFullRecord = () => {
-      setIsJoiningConsult(false);
+      // Persist the include options for highlighting
+      if (currentConsultation?.initialContext?.includeOptions) {
+          console.log("Setting highlight sections:", currentConsultation.initialContext.includeOptions);
+          setHighlightSections(currentConsultation.initialContext.includeOptions);
+      } else {
+           console.log("Clearing highlight sections (no options found).");
+           setHighlightSections(null); // Clear if no options found
+      }
+      setIsJoiningConsult(false); // Switch view
   };
 
   // --- Render Consultation Options Modal (Defined here) ---
@@ -406,25 +498,33 @@ const PatientRecordViewer = ({ patientData }) => {
             {commonHeader}
             
             {/* Focused Context Area - Updated to show related items */} 
-            <section className="p-4 bg-white rounded shadow border border-indigo-200">
-                <h3 className="text-lg font-semibold mb-2 text-indigo-600">Consultation Context</h3>
-                <p className="text-sm text-gray-700">
-                    Initiated by: {currentConsultation.participants[0]?.name || 'Unknown'}
-                </p>
-                <p className="text-sm text-gray-800 font-medium mt-2">
-                    Regarding: {currentConsultation.initialContext?.description || 'General Consultation'}
-                </p>
-                {/* Display Related Items if they exist */} 
-                {currentConsultation.initialContext?.relatedItems && currentConsultation.initialContext.relatedItems.length > 0 && (
-                   <div className="mt-3 pt-3 border-t border-gray-200">
-                        <h4 className="text-sm font-semibold text-gray-600 mb-1">Related Info:</h4>
-                        <ul className="list-disc list-inside space-y-1 pl-4 text-xs text-gray-600">
-                            {currentConsultation.initialContext.relatedItems.map((item, index) => (
-                                <li key={index}>{item}</li>
-                            ))}
-                        </ul>
-                   </div>
+            <section className="p-4 bg-white rounded shadow border border-indigo-200 space-y-3">
+                <h3 className="text-lg font-semibold text-indigo-600">Consultation Context</h3>
+                <div>
+                    <p className="text-sm text-gray-700">
+                        Initiated by: {currentConsultation.participants[0]?.name || 'Unknown'}
+                    </p>
+                    <p className="text-sm text-gray-800 font-medium mt-1">
+                        Initial Topic: {currentConsultation.initialContext?.description || 'General Consultation'}
+                    </p>
+                </div>
+                
+                {/* --- Display AI Consult Focus --- */}
+                {currentConsultation.initialContext?.consultFocusStatement && (
+                    <div className="p-3 bg-blue-50 border border-blue-200 rounded">
+                        <p className="text-sm font-semibold text-blue-800 mb-1">AI Generated Consult Focus:</p>
+                        <p className="text-sm text-blue-900 whitespace-pre-wrap"> 
+                            {currentConsultation.initialContext.consultFocusStatement}
+                        </p>
+                    </div>
                 )}
+                {/* --- End AI Consult Focus --- */}
+                
+                {/* Display Included Related Info - USE HELPER COMPONENT */}
+                <div className="p-3 bg-gray-50 rounded border border-gray-200">
+                   <p className="text-sm font-medium text-gray-600 mb-1">Included Information Sent by Initiator:</p>
+                   <RenderIncludedInfo relatedInfo={currentConsultation.initialContext?.relatedInfo} /> 
+                </div>
             </section>
             
             {/* Consultation Panel takes main space */} 
@@ -847,7 +947,7 @@ const PatientRecordViewer = ({ patientData }) => {
              </section>
 
              {/* Diagnosis */}
-             <section className="mb-6 p-4 bg-white rounded shadow">
+             <section className={`mb-6 p-4 bg-white rounded shadow ${highlightSections?.includeDiagnosis ? 'border-2 border-yellow-400 shadow-lg shadow-yellow-200/50' : ''}`}>
                <h3 className="text-xl font-semibold mb-3 border-b pb-2 text-gray-800">Diagnosis</h3>
                <div className="text-sm">
                  <p><strong>Primary:</strong> {diagnosis.primary || 'N/A'}</p>
@@ -857,9 +957,9 @@ const PatientRecordViewer = ({ patientData }) => {
              </section>
 
              {/* Combined History Section */}
-             <section className="mb-6 p-4 bg-white rounded shadow">
+             <section className={`mb-6 p-4 bg-white rounded shadow ${highlightSections?.includeHistory || highlightSections?.includeMeds || highlightSections?.includeAllergies ? 'border-2 border-yellow-400 shadow-lg shadow-yellow-200/50' : ''}`}>
                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                 <div>
+                 <div className={highlightSections?.includeHistory ? 'bg-yellow-50 p-2 rounded' : ''}>
                    <h4 className="text-lg font-semibold mb-2 text-gray-700">Medical History</h4>
                    {medicalHistory.length > 0 ? (
                      <ul className="list-disc list-inside text-sm space-y-1">
@@ -867,7 +967,7 @@ const PatientRecordViewer = ({ patientData }) => {
                      </ul>
                    ) : <p className="text-sm text-gray-500">None reported.</p>}
                  </div>
-                 <div>
+                 <div className={highlightSections?.includeMeds ? 'bg-yellow-50 p-2 rounded' : ''}>
                    <h4 className="text-lg font-semibold mb-2 text-gray-700">Current Medications</h4>
                    {currentMedications.length > 0 ? (
                      <ul className="list-disc list-inside text-sm space-y-1">
@@ -877,7 +977,7 @@ const PatientRecordViewer = ({ patientData }) => {
                      </ul>
                    ) : <p className="text-sm text-gray-500">None reported.</p>}
                  </div>
-                 <div>
+                 <div className={highlightSections?.includeAllergies ? 'bg-yellow-50 p-2 rounded' : ''}>
                    <h4 className="text-lg font-semibold mb-2 text-gray-700">Allergies</h4>
                    {allergies.length > 0 ? (
                      <ul className="list-disc list-inside text-sm space-y-1">
@@ -889,7 +989,7 @@ const PatientRecordViewer = ({ patientData }) => {
              </section>
 
              {/* Recent Labs */}
-             <section className="mb-6 p-4 bg-white rounded shadow">
+             <section className={`mb-6 p-4 bg-white rounded shadow ${highlightSections?.includeLabs ? 'border-2 border-yellow-400 shadow-lg shadow-yellow-200/50' : ''}`}>
                <h3 className="text-xl font-semibold mb-3 border-b pb-2 text-gray-800">Recent Labs</h3>
                {recentLabs.length > 0 ? (
                  <div className="space-y-4">
@@ -959,7 +1059,7 @@ const PatientRecordViewer = ({ patientData }) => {
              )}
 
              {/* Notes */}
-             <section className="mb-6 p-4 bg-white rounded shadow">
+             <section className={`mb-6 p-4 bg-white rounded shadow ${highlightSections?.includeNotes ? 'border-2 border-yellow-400 shadow-lg shadow-yellow-200/50' : ''}`}>
                <h3 className="text-xl font-semibold mb-3 border-b pb-2 text-gray-800">Progress Notes</h3>
                {notes.length > 0 ? (
                  <div className="space-y-4">

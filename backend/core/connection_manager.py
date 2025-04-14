@@ -2,6 +2,7 @@ from fastapi import WebSocket
 from typing import List, Dict, Set, Optional, Any
 import asyncio
 import json
+from fastapi import WebSocketState
 
 class ConnectionManager:
     """Manages active WebSocket connections, rooms, and user mapping."""
@@ -123,14 +124,30 @@ class ConnectionManager:
                 
                 # Prepare tasks, excluding the sender if provided
                 tasks = []
-                for websocket in self.room_connections[room_id]:
+                # Iterate over a COPY of the list to avoid issues if disconnect modifies it during iteration
+                connections_in_room = list(self.room_connections[room_id]) 
+                for websocket in connections_in_room:
+                    # --- ADDED CHECK --- 
+                    if not websocket or websocket.client_state != WebSocketState.CONNECTED:
+                        print(f"Skipping broadcast to non-existent or disconnected socket in room '{room_id}'")
+                        # Optionally try to clean up here if a None or disconnected socket is found
+                        if websocket in self.room_connections.get(room_id, []):
+                             self.room_connections[room_id].remove(websocket)
+                        continue # Skip to the next socket
+                    # --- END CHECK --- 
+                    
                     if sender is None or websocket != sender:
                          # Use a wrapper coroutine to handle potential send errors individually
                          async def send_wrapper(ws, msg_str):
                             try:
-                                await ws.send_text(msg_str)
+                                # Ensure the socket is still connected before sending
+                                if ws and ws.client_state == WebSocketState.CONNECTED:
+                                    await ws.send_text(msg_str)
+                                else:
+                                     print(f"Send skipped: Socket {getattr(ws, 'client', '?')} disconnected before send.")
+                                     self.disconnect(ws) # Ensure cleanup if state check missed something
                             except Exception as send_ex:
-                                print(f"Error sending broadcast message to {ws.client.host}:{ws.client.port} in room '{room_id}': {send_ex}")
+                                print(f"Error sending broadcast message to {getattr(ws, 'client', '?')} in room '{room_id}': {send_ex}")
                                 # Disconnect the problematic socket
                                 self.disconnect(ws)
                          

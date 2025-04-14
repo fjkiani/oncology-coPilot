@@ -354,26 +354,35 @@ async def websocket_endpoint(websocket: WebSocket):
 
             if message_type == "auth":
                 token = data.get("token")
+                # --- Add Logging --- 
+                print(f"Auth message data received: {data}") 
+                # --- End Logging ---
                 user_id = await authenticate_websocket_token(token)
                 if user_id:
                     authenticated_user_id = user_id
                     await manager.associate_user(user_id, websocket)
                     await manager.send_personal_message({"type": "auth_success", "message": f"Authenticated as {user_id}"}, websocket)
                     print(f"User {user_id} authenticated for WebSocket connection from {client_host}:{client_port}")
-                    # Optionally auto-join a default room if needed, e.g., patient room
-                    patient_id_from_token = data.get("patientId") # Assuming client sends patientId with auth
-                    if patient_id_from_token:
-                        await manager.join_room(patient_id_from_token, websocket)
-                        current_room = patient_id_from_token # Track joined room
-                        print(f"User {user_id} auto-joined room: {patient_id_from_token}")
+                    
+                    # --- Corrected Auto-Join Logic --- 
+                    # Use the patientId explicitly passed during auth for the initial room join
+                    patient_id_for_auto_join = data.get("patientId") 
+                    if patient_id_for_auto_join:
+                        # Ensure we join the PATIENT room, not a stale consult ID
+                        await manager.join_room(patient_id_for_auto_join, websocket)
+                        current_room = patient_id_for_auto_join # Track joined PATIENT room
+                        print(f"User {user_id} auto-joined room: {patient_id_for_auto_join}")
+                    else:
+                        print(f"User {user_id} authenticated but no patientId provided for auto-join.")
+                        # Decide if connection should remain open without a primary room
+                        # For now, we allow it, but prompts might fail later if no room is joined.
+
                 else:
                     await manager.send_personal_message({"type": "auth_fail", "message": "Invalid token"}, websocket)
-                    # Keep connection open but unauthenticated, or disconnect?
-                    # For now, let's disconnect if auth fails
                     print(f"Authentication failed for WebSocket from {client_host}:{client_port}. Disconnecting.")
-                    await websocket.close(code=1008) # Policy Violation
-                    manager.disconnect(websocket) # Ensure manager knows
-                    break # Exit the loop after closing
+                    await websocket.close(code=1008)
+                    manager.disconnect(websocket)
+                    break
 
             # --- All subsequent actions require authentication ---
             elif not authenticated_user_id:
@@ -576,7 +585,51 @@ async def websocket_endpoint(websocket: WebSocket):
                         )
                         agent_result = await get_llm_text_response(prompt)
                     
-                    # Add elif for other commands (e.g., side_effects) here...
+                    # --- NEW: Handle Suggested Questions --- 
+                    elif command in ["ask_glucose_trend", "ask_letrozole_effect", "ask_management_recommendations"]:
+                        question_text = data.get("params", {}).get("question")
+                        if not question_text:
+                             raise ValueError("Missing 'question' parameter for ask command")
+                        
+                        # --- Generate Simulated Responses --- 
+                        if command == "ask_glucose_trend":
+                            # Simulate finding the most recent glucose and add mock trend/A1c
+                            glucose_val = "N/A"
+                            glucose_date = "N/A"
+                            cmp = next((lab for lab in patient_data.get('recentLabs', []) if lab['panelName'] == 'Comprehensive Metabolic Panel (CMP)'), None)
+                            if cmp:
+                                glucose_comp = next((c for c in cmp.get('components',[]) if c['test'] == 'Glucose'), None)
+                                if glucose_comp:
+                                    glucose_val = f"{glucose_comp['value']} {glucose_comp['unit']}"
+                                    glucose_date = cmp.get('resultDate', 'N/A')
+                            
+                            agent_result = (
+                                f"Most Recent Glucose ({glucose_date}): {glucose_val}.\n"
+                                f"Simulated Recent Trend: 105 mg/dL (7/18), 112 mg/dL (7/10), 98 mg/dL (7/1).\n"
+                                f"Simulated Last HbA1c (6/15): 6.8%."
+                            )
+
+                        elif command == "ask_letrozole_effect":
+                            agent_result = (
+                                "Letrozole (an aromatase inhibitor) can occasionally be associated with hyperglycemia or worsening glycemic control, although it's less common than with some other cancer therapies. "
+                                "No major pharmacokinetic interaction between Letrozole and Metformin is typically expected. "
+                                "Consider if the timing of glucose changes aligns with Letrozole initiation or dosage adjustments. Monitoring is key."
+                            )
+                        
+                        elif command == "ask_management_recommendations":
+                             agent_result = (
+                                "Recommendations for managing glucose ~110 mg/dL in T2DM patient on active cancer treatment:\n"
+                                "1. Assess Trend & A1c: Confirm if this is isolated or a pattern (Use 'Glucose Trend & A1c?' question).\n"
+                                "2. Reinforce Lifestyle: Emphasize diet consistency and physical activity as tolerated.\n"
+                                "3. Medication Review: Ensure Metformin adherence and correct dosage. Consider Letrozole contribution (Use 'Letrozole/Glucose Impact?' question).\n"
+                                "4. Monitoring: Advise regular self-monitoring of blood glucose (SMBG) if feasible.\n"
+                                "5. Follow-up: Schedule repeat fasting glucose or A1c based on trend and overall clinical picture."
+                            )
+                        else: 
+                            # Fallback for safety, though this condition shouldn't be hit given the outer elif
+                            agent_result = "Simulated response for this question is not configured."
+                        # --- End Simulated Responses --- 
+
                     elif command == "review_side_effects":
                          # Use orchestrator for side effects intent
                         result = await orchestrator.handle_prompt(
@@ -642,7 +695,8 @@ async def websocket_endpoint(websocket: WebSocket):
             # Optional: Broadcast a leave message if desired
             leave_message = {"type": "system_message", "roomId": current_room, "content": f"{authenticated_user_id} left."}
             # Don't await this, just fire and forget if it fails
-            asyncio.create_task(manager.broadcast_to_room(current_room, leave_message, exclude_sender=websocket))
+            # Pass websocket as the third positional arg (sender to exclude)
+            asyncio.create_task(manager.broadcast_to_room(current_room, leave_message, websocket))
             
 
 # Simple root endpoint
