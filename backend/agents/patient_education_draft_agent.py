@@ -1,6 +1,7 @@
 import os
 from typing import Dict, Any
-from core.llm_clients import GeminiClient
+# from core.llm_clients import GeminiClient
+from backend.core.llm_clients import GeminiClient
 
 class PatientEducationDraftAgent:
     """

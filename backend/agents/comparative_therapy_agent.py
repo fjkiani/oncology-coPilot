@@ -2,7 +2,8 @@ import os
 from typing import Dict, Any
 # Import necessary LLM or data source utilities later
 # from ..core.llm_clients import GeminiClient # Old relative import
-from core.llm_clients import GeminiClient # Corrected absolute import
+# from core.llm_clients import GeminiClient # Corrected absolute import
+from backend.core.llm_clients import GeminiClient # Fixed absolute import with backend prefix
 
 class ComparativeTherapyAgent:
     """

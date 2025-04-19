@@ -12,6 +12,7 @@ import time
 import random
 import shlex
 import argparse
+from datetime import datetime
 
 # --- Explicitly add project root to sys.path --- 
 # This helps resolve module imports when running with uvicorn from the project root
@@ -400,29 +401,32 @@ async def handle_message_for_agent(message_data: dict, websocket: WebSocket, use
         agent_name = "comparative_therapist"
         print(f"Handling /compare-therapy command: {message_text}")
         try:
-            # Define regex to extract parameters within quotes
-            pattern = re.compile(r'/compare-therapy\s+current="(.*?)"\s+vs="(.*?)"\s+focus="(.*?)"\s*$')
-            match = pattern.match(message_text)
+            # First check the format of the message to understand what we're parsing
+            print(f"Raw command text: {message_text}")
+            
+            # Extract parameters without using argparse
+            # Example: /compare-therapy current="X" vs="Y" focus="Z"
+            command_pattern = r'/compare-therapy\s+current="([^"]*)"\s+vs="([^"]*)"\s+focus="([^"]*)"'
+            match = re.search(command_pattern, message_text)
             
             if not match:
-                raise ValueError("Invalid command format. Use: /compare-therapy current=\"Therapy A\" vs=\"Therapy B\" focus=\"criteria1,criteria2\"")
+                raise ValueError("Command format incorrect. Use: /compare-therapy current=\"therapy1\" vs=\"therapy2\" focus=\"criteria1,criteria2\"")
             
-            therapy_a = match.group(1)
-            therapy_b = match.group(2)
-            focus_str = match.group(3)
-            focus_criteria = [c.strip() for c in focus_str.split(',') if c.strip()]
+            current_therapy = match.group(1)
+            comparison_therapy = match.group(2)
+            focus_criteria_text = match.group(3)
             
-            if not therapy_a or not therapy_b or not focus_criteria:
-                 raise ValueError("Missing required arguments (current, vs, focus).")
-
-            print(f"Parsed command: therapy_a='{therapy_a}', therapy_b='{therapy_b}', focus_criteria={focus_criteria}")
-
+            print(f"Parsed manually: current={current_therapy}, vs={comparison_therapy}, focus={focus_criteria_text}")
+            
+            # Split focus criteria into a list
+            focus_criteria = [c.strip() for c in focus_criteria_text.split(',')]
+            
             agent = orchestrator.agents.get(agent_name)
             if agent:
                 result_text = await agent.run(
                     patient_id=patient_id, 
-                    therapy_a=therapy_a, 
-                    therapy_b=therapy_b, 
+                    therapy_a=current_therapy, 
+                    therapy_b=comparison_therapy, 
                     focus_criteria=focus_criteria
                 )
             else:
@@ -683,60 +687,114 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 try:
                     if message_text.startswith("/compare-therapy"):
-                        args = shlex.split(message_text) # Use shlex for robust parsing
-                        parser = argparse.ArgumentParser(prog="/compare-therapy", description="Compare two therapies.")
-                        parser.add_argument("-current", required=True, help="Current therapy regimen")
-                        parser.add_argument("-vs", required=True, help="Therapy regimen to compare against")
-                        parser.add_argument("-focus", required=True, help="Comma-separated comparison criteria")
-                        
-                        # Use parse_known_args and skip the command name (args[0])
-                        parsed_args, _ = parser.parse_known_args(args[1:]) 
-
-                        agent_name = "ComparativeTherapyAgent"
-                        agent = ComparativeTherapyAgent()
-                        result = await agent.run(
-                            current_therapy=parsed_args.current,
-                            comparison_therapy=parsed_args.vs,
-                            comparison_criteria=parsed_args.focus.split(','), # Split focus string into list
-                            patient_context={"id": patient_id_for_command} # Minimal context for now
-                        )
-                        result_text = result["comparison_summary"]
+                        try:
+                            print(f"Processing /compare-therapy command: {message_text}")
+                            
+                            # First check the format of the message to understand what we're parsing
+                            print(f"Raw command text: {message_text}")
+                            
+                            # Extract parameters without using argparse
+                            # Example: /compare-therapy current="X" vs="Y" focus="Z"
+                            command_pattern = r'/compare-therapy\s+current="([^"]*)"\s+vs="([^"]*)"\s+focus="([^"]*)"'
+                            match = re.search(command_pattern, message_text)
+                            
+                            if not match:
+                                raise ValueError("Command format incorrect. Use: /compare-therapy current=\"therapy1\" vs=\"therapy2\" focus=\"criteria1,criteria2\"")
+                            
+                            current_therapy = match.group(1)
+                            comparison_therapy = match.group(2)
+                            focus_criteria_text = match.group(3)
+                            
+                            print(f"Parsed manually: current={current_therapy}, vs={comparison_therapy}, focus={focus_criteria_text}")
+                            
+                            # Split focus criteria into a list
+                            focus_criteria = [c.strip() for c in focus_criteria_text.split(',')]
+                            
+                            # Import again at this scope to be sure
+                            try:
+                                from backend.agents.comparative_therapy_agent import ComparativeTherapyAgent
+                                agent_name = "ComparativeTherapyAgent"
+                                agent = ComparativeTherapyAgent()
+                                print(f"Instantiated {agent_name}")
+                                
+                                result = await agent.run(
+                                    patient_id=patient_id_for_command,
+                                    therapy_a=current_therapy,
+                                    therapy_b=comparison_therapy,
+                                    focus_criteria=focus_criteria,
+                                    context={"id": patient_id_for_command}
+                                )
+                                print(f"Agent run complete, result: {type(result)}")
+                                
+                                # Handle both string and dict return types
+                                if isinstance(result, dict):
+                                    result_text = result.get("comparison_summary", str(result))
+                                else:
+                                    # Assume it's a string if not a dict
+                                    result_text = str(result)
+                            except ImportError as imp_err:
+                                print(f"ImportError when loading ComparativeTherapyAgent: {imp_err}")
+                                raise
+                            except Exception as agent_err:
+                                print(f"Error running ComparativeTherapyAgent: {agent_err}")
+                                raise
+                                
+                        except Exception as ex:
+                            print(f"Error in /compare-therapy command block: {ex}")
+                            result_text = f"Error processing /compare-therapy command: {ex}"
+                            agent_name = "System"
+                            agent_response_type = "error"
 
                     elif message_text.startswith("/draft-patient-info"):
-                        # Parse the command using regex instead of argparse to match the format topic="..."
                         try:
-                            match = re.search(r'/draft-patient-info\s+topic="(.*?)"\s*$', message_text, re.IGNORECASE)
+                            print(f"Processing /draft-patient-info command: {message_text}")
+                            
+                            # First check the format of the message to understand what we're parsing
+                            print(f"Raw command text: {message_text}")
+                            
+                            # Extract topic without using argparse
+                            # Example: /draft-patient-info topic="Managing nausea from chemotherapy"
+                            command_pattern = r'/draft-patient-info\s+topic="([^"]*)"'
+                            match = re.search(command_pattern, message_text)
+                            
                             if not match:
-                                raise ValueError("Invalid command format. Use: /draft-patient-info topic=\"Your explanation topic\"")
+                                raise ValueError("Command format incorrect. Use: /draft-patient-info topic=\"Your topic here\"")
                             
                             topic = match.group(1)
-                            if not topic:
-                                raise ValueError("Missing required argument (topic).")
-                                
-                            print(f"Parsed command: topic='{topic}'")
-
-                            agent_name = "PatientEducationDraftAgent"
-                            agent = PatientEducationDraftAgent()
+                            print(f"Parsed manually: topic={topic}")
                             
+                            # Import again at this scope to be sure
                             try:
-                                # Wrap the agent execution in a try-except to handle LLM errors gracefully
+                                from backend.agents.patient_education_draft_agent import PatientEducationDraftAgent
+                                agent_name = "PatientEducationDraftAgent"
+                                agent = PatientEducationDraftAgent()
+                                print(f"Instantiated {agent_name}")
+                                
                                 result = await agent.run(
                                     topic=topic,
                                     context={"id": patient_id_for_command} # Minimal context
                                 )
-                                result_text = result  # The agent returns the formatted string directly
-                            except Exception as agent_ex:
-                                print(f"Error during agent execution: {agent_ex}")
-                                result_text = f"Sorry, I couldn't generate patient education content: {agent_ex}"
-                                agent_response_type = "error"
-                                agent_name = "System"
-                            else:
+                                print(f"Agent run complete, result: {type(result)}")
+                                
+                                # Handle both string and dict return types
+                                if isinstance(result, dict):
+                                    result_text = result.get("draft_content", str(result))
+                                else:
+                                    # Assume it's a string if not a dict
+                                    result_text = str(result)
                                 agent_response_type = "patient_edu_draft" # Specific type for this agent
-                        except Exception as e:
-                            print(f"Error in command parsing: {e}")
-                            result_text = f"Error: {e}"
-                            agent_response_type = "error"
+                            except ImportError as imp_err:
+                                print(f"ImportError when loading PatientEducationDraftAgent: {imp_err}")
+                                raise
+                            except Exception as agent_err:
+                                print(f"Error running PatientEducationDraftAgent: {agent_err}")
+                                raise
+                                
+                        except Exception as ex:
+                            print(f"Error in /draft-patient-info command block: {ex}")
+                            result_text = f"Error processing /draft-patient-info command: {ex}"
                             agent_name = "System"
+                            agent_response_type = "error"
 
                     else:
                          # Command not recognized
@@ -753,17 +811,38 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Prepare response if command was processed (even if it was an error message)
                 if agent_name and result_text is not None:
                     timestamp = asyncio.get_event_loop().time()
-                    response_data = {
-                        "type": agent_response_type,
-                        "roomId": room_id,
-                        "agentName": agent_name,
-                        "sender": sender_info, # Echo sender info
-                        "timestamp": timestamp,
-                        # Dynamically choose the content key based on response type
-                        ("result" if agent_response_type == "agent_result" 
-                         else "draftContent" if agent_response_type == "patient_edu_draft" 
-                         else "message"): result_text
-                    }
+                    
+                    # For agent_result type (comparative therapy agent)
+                    if agent_response_type == "agent_result":
+                        response_data = {
+                            "type": agent_response_type,
+                            "roomId": room_id,
+                            "agentName": agent_name,
+                            "sender": sender_info, 
+                            "timestamp": timestamp,
+                            "result": result_text
+                        }
+                    # For patient_edu_draft type
+                    elif agent_response_type == "patient_edu_draft":
+                        response_data = {
+                            "type": agent_response_type,
+                            "roomId": room_id,
+                            "agentName": agent_name,
+                            "sender": sender_info,
+                            "timestamp": timestamp,
+                            "draftContent": result_text
+                        }
+                    # For error messages
+                    else:
+                        response_data = {
+                            "type": agent_response_type,
+                            "roomId": room_id,
+                            "agentName": agent_name,
+                            "sender": sender_info,
+                            "timestamp": timestamp,
+                            "message": result_text
+                        }
+                    
                     # Broadcast the agent's result
                     print(f"Broadcasting agent ({agent_name}) result to room {room_id}")
                     await manager.broadcast_to_room(room_id, response_data)
