@@ -8,12 +8,14 @@ from typing import Any, Dict
 import google.generativeai as genai
 
 # Import Agents
-from agents.data_analysis_agent import DataAnalysisAgent
-from agents.notification_agent import NotificationAgent
-from agents.scheduling_agent import SchedulingAgent
-from agents.referral_agent import ReferralAgent
-from agents.side_effect_agent import SideEffectAgent
-from agents.clinical_trial_agent import ClinicalTrialAgent
+from backend.agents.data_analysis_agent import DataAnalysisAgent
+from backend.agents.notification_agent import NotificationAgent
+from backend.agents.scheduling_agent import SchedulingAgent
+from backend.agents.referral_agent import ReferralAgent
+from backend.agents.side_effect_agent import SideEffectAgent
+from backend.agents.clinical_trial_agent import ClinicalTrialAgent
+from backend.agents.comparative_therapy_agent import ComparativeTherapyAgent
+from backend.agents.patient_education_draft_agent import PatientEducationDraftAgent
 
 # Placeholder imports - will need LangChain components later
 # from langchain.chat_models import ChatGoogleGenerativeAI # Or other LLM
@@ -42,6 +44,8 @@ SCHEDULER = "scheduler"
 REFERRAL_DRAFTER = "referral_drafter"
 CLINICAL_TRIAL_FINDER = "clinical_trial_finder"
 SIDE_EFFECT_MANAGER = "side_effect_manager"
+COMPARATIVE_THERAPIST = "comparative_therapist"
+PATIENT_EDUCATOR = "patient_educator"
 
 # Define constants for intent names
 SUMMARIZE = "summarize"
@@ -86,7 +90,9 @@ class AgentOrchestrator:
             SCHEDULER: SchedulingAgent,
             REFERRAL_DRAFTER: ReferralAgent,
             CLINICAL_TRIAL_FINDER: ClinicalTrialAgent,
-            SIDE_EFFECT_MANAGER: SideEffectAgent
+            SIDE_EFFECT_MANAGER: SideEffectAgent,
+            COMPARATIVE_THERAPIST: ComparativeTherapyAgent,
+            PATIENT_EDUCATOR: PatientEducationDraftAgent
         }
         
         for agent_name, agent_class in agent_classes.items():

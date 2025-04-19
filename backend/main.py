@@ -6,6 +6,21 @@ import os
 from dotenv import load_dotenv # Import load_dotenv
 import asyncio # Import asyncio if not already present
 from typing import Optional, List, Dict, Any # <-- Import Optional, List, Dict, Any for type hinting
+import re # <-- Import regex module
+import sys # <-- Import sys
+import time
+import random
+import shlex
+import argparse
+
+# --- Explicitly add project root to sys.path --- 
+# This helps resolve module imports when running with uvicorn from the project root
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    print(f"Adding {PROJECT_ROOT} to sys.path")
+    sys.path.insert(0, PROJECT_ROOT)
+# --- End sys.path modification --- 
+
 # Placeholder for future Python-based AI utils
 # from . import ai_utils 
 
@@ -13,12 +28,14 @@ from typing import Optional, List, Dict, Any # <-- Import Optional, List, Dict, 
 load_dotenv()
 
 # Import the orchestrator, blockchain utility, and connection manager
-from core.orchestrator import AgentOrchestrator
-from core.blockchain_utils import record_contribution # <-- Import the new function
-from core.connection_manager import manager # <-- Import the connection manager
-# Assume a utility exists or can be created to call LLM directly
-# We might need to create this file/function based on existing agent logic
-from core.llm_utils import get_llm_text_response 
+from backend.core.orchestrator import AgentOrchestrator
+from backend.core.blockchain_utils import record_contribution
+from backend.core.connection_manager import manager
+from backend.core.llm_utils import get_llm_text_response
+
+# Import specific agents needed for slash commands
+from backend.agents.comparative_therapy_agent import ComparativeTherapyAgent
+from backend.agents.patient_education_draft_agent import PatientEducationDraftAgent
 
 app = FastAPI()
 
@@ -335,6 +352,144 @@ async def _generate_consult_focus(patient_id: str, topic: str, related_info: Dic
         print(f"[Focus Generation] Error calling LLM: {e}")
         return f"Error generating AI focus statement: {e}"
 
+# --- WebSocket Helper for Agent Actions --- 
+async def handle_message_for_agent(message_data: dict, websocket: WebSocket, user_id: str, room_id: str) -> Optional[dict]:
+    """
+    Checks if a message triggers a direct agent action (e.g., command or button press).
+    If so, executes the agent and returns the formatted result for broadcasting.
+    Otherwise, returns None.
+    """
+    message_type = message_data.get("type")
+    message_text = message_data.get("text", "").strip()
+    agent_name = None
+    result_text = None
+    status = "success"
+    error_message = None
+
+    # Placeholder: Get patient_id from message_data or room_id context if needed
+    # Assuming patient_id might be part of the room_id or message context
+    # For now, let's extract if sent explicitly in the message, otherwise use a placeholder.
+    patient_id = message_data.get("patientId", room_id.split('_')[1] if '_patient_' in room_id else "UNKNOWN_PATIENT")
+
+    # Check for direct agent invocation commands or specific types
+    if message_type == "agent_action" and message_data.get("action") == "summarize":
+        agent_name = "data_analyzer"
+        try:
+            agent = orchestrator.agents.get(agent_name)
+            if agent:
+                # Prepare context and kwargs for DataAnalysisAgent
+                patient_data = mock_patient_data_dict.get(patient_id, {})
+                context = {"patient_data": patient_data}
+                # Extract relevant parts for the prompt if needed, or pass the whole message
+                prompt = message_data.get("payload", {}).get("prompt", "Summarize the patient record.")
+                entities = message_data.get("payload", {}).get("entities", {})
+                kwargs = {"prompt": prompt, "entities": entities, "patient_id": patient_id}
+                
+                # Run the agent (adjust based on actual run signature)
+                agent_result = await agent.run(context=context, **kwargs) 
+                result_text = agent_result.get("output") or agent_result.get("summary", "No summary available.")
+            else:
+                raise ValueError(f"Agent '{agent_name}' not found.")
+        except Exception as e:
+            print(f"Error running {agent_name}: {e}")
+            status = "failure"
+            error_message = f"Failed to execute {agent_name}: {e}"
+            result_text = f"Error: Could not generate summary."
+    
+    elif message_text.startswith("/compare-therapy"):
+        agent_name = "comparative_therapist"
+        print(f"Handling /compare-therapy command: {message_text}")
+        try:
+            # Define regex to extract parameters within quotes
+            pattern = re.compile(r'/compare-therapy\s+current="(.*?)"\s+vs="(.*?)"\s+focus="(.*?)"\s*$')
+            match = pattern.match(message_text)
+            
+            if not match:
+                raise ValueError("Invalid command format. Use: /compare-therapy current=\"Therapy A\" vs=\"Therapy B\" focus=\"criteria1,criteria2\"")
+            
+            therapy_a = match.group(1)
+            therapy_b = match.group(2)
+            focus_str = match.group(3)
+            focus_criteria = [c.strip() for c in focus_str.split(',') if c.strip()]
+            
+            if not therapy_a or not therapy_b or not focus_criteria:
+                 raise ValueError("Missing required arguments (current, vs, focus).")
+
+            print(f"Parsed command: therapy_a='{therapy_a}', therapy_b='{therapy_b}', focus_criteria={focus_criteria}")
+
+            agent = orchestrator.agents.get(agent_name)
+            if agent:
+                result_text = await agent.run(
+                    patient_id=patient_id, 
+                    therapy_a=therapy_a, 
+                    therapy_b=therapy_b, 
+                    focus_criteria=focus_criteria
+                )
+            else:
+                raise ValueError(f"Agent '{agent_name}' not found.")
+                
+        except Exception as e:
+            print(f"Error processing /compare-therapy: {e}")
+            status = "failure"
+            error_message = f"Failed to process command: {e}"
+            result_text = f"Error: {e}"
+
+    elif message_text.startswith("/draft-patient-info"):
+        # Parse the command using regex instead of argparse to match the format topic="..."
+        try:
+            match = re.search(r'/draft-patient-info\s+topic="(.*?)"\s*$', message_text, re.IGNORECASE)
+            if not match:
+                raise ValueError("Invalid command format. Use: /draft-patient-info topic=\"Your explanation topic\"")
+            
+            topic = match.group(1)
+            if not topic:
+                raise ValueError("Missing required argument (topic).")
+                
+            print(f"Parsed command: topic='{topic}'")
+
+            agent_name = "PatientEducationDraftAgent"
+            agent = PatientEducationDraftAgent()
+            
+            try:
+                # Wrap the agent execution in a try-except to handle LLM errors gracefully
+                result = await agent.run(
+                    topic=topic,
+                    context={"id": patient_id} # Minimal context
+                )
+                result_text = result  # The agent returns the formatted string directly
+            except Exception as agent_ex:
+                print(f"Error during agent execution: {agent_ex}")
+                result_text = f"Sorry, I couldn't generate patient education content: {agent_ex}"
+                agent_response_type = "error"
+                agent_name = "System"
+            else:
+                agent_response_type = "patient_edu_draft" # Specific type for this agent
+        except Exception as e:
+            print(f"Error in command parsing: {e}")
+            result_text = f"Error: {e}"
+            agent_response_type = "error"
+            agent_name = "System"
+
+    # --- Add other elif blocks here for future commands like /draft-patient-info ---
+
+    if agent_name and result_text:
+        # Format the agent response
+        response_data = {
+            "type": "agent_response",
+            "sender": agent_name,
+            "status": status,
+            "text": result_text,
+            "error": error_message,
+            "timestamp": message_data.get("timestamp"), # Keep original timestamp if possible
+            "id": message_data.get("id"), # Keep original ID if possible
+            "userId": "agent", # Identify sender as agent
+            "username": agent_name.replace("_", " ").title(),
+            "replyingToTimestamp": message_data.get("timestamp") # Agent reply refers to the command timestamp
+        }
+        return response_data
+    else:
+        return None # Not an agent message or command
+
 # --- WebSocket Endpoint ---
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -509,6 +664,118 @@ async def websocket_endpoint(websocket: WebSocket):
                 else:
                     print(f"Target user {target_user_id} not found or not connected.")
                     await manager.send_personal_message({"type": "initiate_fail", "roomId": room_id, "error": "Colleague is not currently connected"}, websocket)
+
+            # === Handle Agent Commands Sent Via Text (Slash Commands) ===
+            elif message_type == "agent_command_text":
+                room_id = data.get("roomId")
+                message_text = data.get("text", "").strip() # The raw command text
+                sender_info = data.get("sender")
+                patient_id_for_command = data.get("patientId") # Expect patientId for context
+
+                if not all([room_id, message_text, sender_info, patient_id_for_command]):
+                    await manager.send_personal_message({"type": "error", "message": "Missing fields for agent command text"}, websocket)
+                    continue # Skip processing
+
+                # Parse the command
+                agent_name = None
+                result_text = None
+                agent_response_type = "agent_result" # Default response type
+
+                try:
+                    if message_text.startswith("/compare-therapy"):
+                        args = shlex.split(message_text) # Use shlex for robust parsing
+                        parser = argparse.ArgumentParser(prog="/compare-therapy", description="Compare two therapies.")
+                        parser.add_argument("-current", required=True, help="Current therapy regimen")
+                        parser.add_argument("-vs", required=True, help="Therapy regimen to compare against")
+                        parser.add_argument("-focus", required=True, help="Comma-separated comparison criteria")
+                        
+                        # Use parse_known_args and skip the command name (args[0])
+                        parsed_args, _ = parser.parse_known_args(args[1:]) 
+
+                        agent_name = "ComparativeTherapyAgent"
+                        agent = ComparativeTherapyAgent()
+                        result = await agent.run(
+                            current_therapy=parsed_args.current,
+                            comparison_therapy=parsed_args.vs,
+                            comparison_criteria=parsed_args.focus.split(','), # Split focus string into list
+                            patient_context={"id": patient_id_for_command} # Minimal context for now
+                        )
+                        result_text = result["comparison_summary"]
+
+                    elif message_text.startswith("/draft-patient-info"):
+                        # Parse the command using regex instead of argparse to match the format topic="..."
+                        try:
+                            match = re.search(r'/draft-patient-info\s+topic="(.*?)"\s*$', message_text, re.IGNORECASE)
+                            if not match:
+                                raise ValueError("Invalid command format. Use: /draft-patient-info topic=\"Your explanation topic\"")
+                            
+                            topic = match.group(1)
+                            if not topic:
+                                raise ValueError("Missing required argument (topic).")
+                                
+                            print(f"Parsed command: topic='{topic}'")
+
+                            agent_name = "PatientEducationDraftAgent"
+                            agent = PatientEducationDraftAgent()
+                            
+                            try:
+                                # Wrap the agent execution in a try-except to handle LLM errors gracefully
+                                result = await agent.run(
+                                    topic=topic,
+                                    context={"id": patient_id_for_command} # Minimal context
+                                )
+                                result_text = result  # The agent returns the formatted string directly
+                            except Exception as agent_ex:
+                                print(f"Error during agent execution: {agent_ex}")
+                                result_text = f"Sorry, I couldn't generate patient education content: {agent_ex}"
+                                agent_response_type = "error"
+                                agent_name = "System"
+                            else:
+                                agent_response_type = "patient_edu_draft" # Specific type for this agent
+                        except Exception as e:
+                            print(f"Error in command parsing: {e}")
+                            result_text = f"Error: {e}"
+                            agent_response_type = "error"
+                            agent_name = "System"
+
+                    else:
+                         # Command not recognized
+                        result_text = f"Unknown command: {message_text.split()[0]}"
+                        agent_name = "System"
+                        agent_response_type = "error" # Send as error type
+
+                except (argparse.ArgumentError, Exception) as e:
+                    print(f"Error parsing or running agent command '{message_text}': {e}")
+                    result_text = f"Error processing command: {e}"
+                    agent_name = "System"
+                    agent_response_type = "error"
+
+                # Prepare response if command was processed (even if it was an error message)
+                if agent_name and result_text is not None:
+                    timestamp = asyncio.get_event_loop().time()
+                    response_data = {
+                        "type": agent_response_type,
+                        "roomId": room_id,
+                        "agentName": agent_name,
+                        "sender": sender_info, # Echo sender info
+                        "timestamp": timestamp,
+                        # Dynamically choose the content key based on response type
+                        ("result" if agent_response_type == "agent_result" 
+                         else "draftContent" if agent_response_type == "patient_edu_draft" 
+                         else "message"): result_text
+                    }
+                    # Broadcast the agent's result
+                    print(f"Broadcasting agent ({agent_name}) result to room {room_id}")
+                    await manager.broadcast_to_room(room_id, response_data)
+                else:
+                    # This case handles parsing/execution errors where we only send back a personal message
+                    await manager.send_personal_message({
+                        "type": "error", 
+                        "message": result_text or "Failed to process command.", 
+                        "timestamp": asyncio.get_event_loop().time()
+                    }, websocket)
+                    
+                continue # Agent command handled, skip further checks
 
             elif message_type == "chat_message":
                 room_id = data.get("roomId")

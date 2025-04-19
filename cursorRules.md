@@ -182,28 +182,99 @@ Phase 2: Advanced AI Capabilities, Agent Implementation & Workflow Integration
   [X] Implement `SideEffectAgent` (Mock data identification & management tips).
   [X] Implement `ClinicalTrialAgent` (Mock data search based on condition).
   [X] Implement WebSocket Communication (Backend Endpoint & Frontend Integration)
-  [ ] Research & Integrate/Fine-tune Specialized Cancer Analysis Models (Beyond Summarization)
-  [ ] Refine Prompt Interface for complex, multi-step agent tasks
-  [ ] Enhance UI/UX for agent interaction and task management (status, approvals)
+  [X] Research & Integrate/Fine-tune Specialized Cancer Analysis Models (Beyond Summarization)
+  [X] Refine Prompt Interface for complex, multi-step agent tasks
+  [X] Enhance UI/UX for agent interaction and task management (status, approvals)
   [X] Develop Smart Contracts for Contribution Tracking (Proof-of-Concept)
       * Initial POC completed: Feedback logging metadata via local Hardhat network.
 
 Phase 3: Collaboration, Research Platform, Decentralization & Expanded Integrations
   [ ] Design Secure Real-time Collaboration Architecture
-  [ ] Implement Doctor-to-Doctor Consultation Features
+  [X] Implement Doctor-to-Doctor Consultation Features
       *   Goal: Build a graph-aware consultation system, not just chat.
       *   Design with **conceptual graph model** for lineage (Patient, Consult, Doctor, Message, Context, Agent Actions).
-      *   Enable **contextual initiation** (link consult to specific data points).
-      *   Support **in-consult agent invocation** (e.g., `/summarize`, `/check-interactions`).
+      *   Enable **contextual initiation** (link consult to specific data points). - **Done (AI Focus Statement)**
+      *   Support **in-consult agent invocation** (e.g., `/summarize`, `/check-interactions`). - **Done (Agent Buttons & Suggested Questions)**
       *   Lay groundwork for future **GraphRAG** capabilities (complex queries over consultation history/patient graph).
+      *   **Implement Explicit Lineage Tracking** (via `replyingToTimestamp`) - **Done!**
       *   (See `REALTIME_COLLABORATION.md` for detailed design).
+  [ ] **(Next)** Develop Advanced Agents for Consultation (Beyond Simple Q&A):
+      *   **Goal:** Move beyond single-turn Q&A to agents that can perform multi-step tasks or analysis triggered within the consultation, providing richer insights for collaborators.
+      *   **Brainstorming Ideas (Dr. B Example Continued - Hyperglycemia):**
+          *   **`GlucoseDeepDiveAgent`**: 
+              *   Trigger: User asks "Investigate glucose trend further" or clicks a related button.
+              *   Steps: 
+                  1.  Fetch extended glucose history (simulated).
+                  2.  Fetch relevant medication history (start dates, dose changes for Metformin, Letrozole).
+                  3.  Fetch recent notes mentioning glucose/diabetes management.
+                  4.  Synthesize findings: "Glucose trend shows X. Note that Letrozole started on [Date], glucose increased slightly afterwards. Recent PCP note mentions Y about diet."
+                  5.  Present synthesized findings & potentially suggest specific follow-up questions for the other doctor.
+          *   **`ComparativeTherapyAgent`**: 
+              *   Trigger: User asks "Are there alternative cancer treatments with less glucose impact?"
+              *   Steps:
+                  1.  Identify current relevant treatment (Letrozole).
+                  2.  Query knowledge base (simulated/LLM) for alternatives for Stage III IDC.
+                  3.  Filter/Rank alternatives based on known metabolic side effect profiles.
+                  4.  Present findings: "Alternative considerations include [Drug A] (similar profile), [Drug B] (potentially lower risk but different MOA/efficacy concerns). Discuss risks/benefits with Oncology."
+          *   **`PatientEducationDraftAgent`**: 
+              *   Trigger: User asks "Draft patient message explaining glucose monitoring importance."
+              *   Steps:
+                  1.  Use LLM to draft a patient-friendly explanation based on the current context (mild elevation, T2DM, cancer treatment).
+                  2.  Present draft in chat for clinician review/editing before sending.
+      *   **Technical Considerations:**
+          *   May require more state management than simple Q&A.
+          *   Could potentially leverage agent frameworks like LangChain or Autogen for multi-step logic if needed, or implement directly in Python. 
+          *   Needs clear UI triggers (buttons or specific commands like `/deepdive-glucose`).
   [ ] Develop Secure, Anonymized/Aggregated Data Sharing for Research (leveraging FL principles)
-  [ ] **Implement additional Agents** (e.g., `OrderAgent`, `PharmacyAgent`)
   [ ] **Integrate with Production APIs** (Scheduling, Messaging, EHR Orders, etc. - Requires Partnerships/Access)
-  [ ] Build Research Collaboration Workspace/Tools
+  [ ] Build Research Collaboration Workspace/Tools 
   [ ] Implement Federated Learning Infrastructure (Coordination Layer)
   [ ] Integrate Blockchain for Auditing FL Rounds & Rewarding Contributors (Pilot)
   [ ] Develop Decentralized Governance Model Concept (e.g., DAO principles)
+
+**Current Focus: Advanced Consultation Agents (Phase 3 Enhancement)**
+
+Implement `ComparativeTherapyAgent` and `PatientEducationDraftAgent` integrated into the real-time consultation feature.
+
+**Plan:**
+
+*   **ComparativeTherapyAgent - Backend:**
+    *   [ ] Create `backend/agents/comparative_therapy_agent.py` module with `ComparativeTherapyAgent` class.
+    *   [ ] Define agent initialization (potentially needs access to data sources/LLM).
+    *   [ ] Implement core `run` or `execute` method:
+        *   [ ] Placeholder for retrieving patient context (needs patient ID).
+        *   [ ] Implement LLM call (Gemini) with a structured prompt for comparing therapies based on input criteria.
+        *   [ ] Placeholder/design for accessing external knowledge bases (if applicable later).
+        *   [ ] Format LLM response into a structured comparison string.
+    *   [ ] Add routing logic in `backend/core/orchestrator.py` to parse `/compare-therapy` command and invoke this agent.
+    *   [ ] Integrate with `backend/core/websocket_manager.py` to send the formatted comparison result back to the specific consultation room.
+    *   [ ] Add error handling.
+
+*   **PatientEducationDraftAgent - Backend:**
+    *   [ ] Create `backend/agents/patient_education_draft_agent.py` module with `PatientEducationDraftAgent` class.
+    *   [ ] Define agent initialization (needs LLM access).
+    *   [ ] Implement core `run` or `execute` method:
+        *   [ ] Placeholder for retrieving relevant chat context (topic + maybe recent messages).
+        *   [ ] Implement LLM call (Gemini) with a carefully crafted prompt to generate patient-friendly text for the given topic, emphasizing it's a draft.
+        *   [ ] Format the LLM response, clearly marking it as a draft.
+    *   [ ] Add routing logic in `backend/core/orchestrator.py` to parse `/draft-patient-info` command and invoke this agent.
+    *   [ ] Integrate with `backend/core/websocket_manager.py` to send the formatted draft back to the specific consultation room.
+    *   [ ] Add error handling.
+
+*   **Frontend Integration:**
+    *   [ ] Modify `ConsultationChat.jsx` (or relevant chat input component):
+        *   [ ] Detect `/compare-therapy` and `/draft-patient-info` commands.
+        *   [ ] Parse arguments from the commands.
+        *   [ ] Send appropriate message structure via WebSocket when a command is entered.
+    *   [ ] Modify WebSocket message handling in frontend:
+        *   [ ] Recognize messages originating from these agents.
+        *   [ ] Display the structured comparison and draft education text correctly within the chat interface (preserving formatting, draft markers).
+
+*   **Testing & Refinement:**
+    *   [ ] Test agent triggers and responses in the consultation UI.
+    *   [ ] Refine LLM prompts for both agents based on output quality.
+    *   [ ] Test error handling scenarios (e.g., invalid commands, LLM failures).
+    *   [ ] Ensure disclaimers and draft markers are prominent.
 
 Phase 4: Deployment & Refinement
   [ ] Pilot Testing with Oncologists & Researchers
@@ -295,3 +366,8 @@ Development Strategy for Specialization:
 // ... (Technology Stack Considerations - Maybe update later as needed)
 // ... (Key Challenges - Maybe update later as needed)
 // ... (Lessons & Design Principles) ...
+
+*   When processing options data from RapidAPI, create a mapping of strikes to straddles for easier lookup and processing of call and put data
+*   When implementing the display_analysis function in Streamlit, ensure it combines all necessary display components (market overview, ticker analysis, technical insights, learning points) to avoid NameError exceptions
+*   Python 3.9 requires `typing.Union` and `typing.Tuple` for type hints instead of the `|` operator and `tuple[]` syntax (e.g., use `Tuple[bool, Union[str, None]]`).
+*   When sending transactions with `web3.py`, the signed transaction object (`signed_tx`) returned by `w3.eth.account.sign_transaction` exposes the raw bytes via the `raw_transaction` attribute (e.g., `w3.eth.send_raw_transaction(signed_tx.raw_transaction)`).

@@ -8,14 +8,17 @@ import json
 from datetime import datetime
 from typing import Any, Dict
 
-# Import the base class
-from core.agent_interface import AgentInterface
+# Import the base agent interface and the LLM client
+from backend.core.agent_interface import AgentInterface
+from backend.core.llm_clients import GeminiClient
 
 # Placeholder for Gemini/LangChain integration
 # from langchain_google_genai import ChatGoogleGenerativeAI
 # from langchain_core.prompts import ChatPromptTemplate
 # from langchain_core.output_parsers import StrOutputParser
 
+# Define supported tasks
+SUMMARIZE = "summarize"
 
 class DataAnalysisAgent(AgentInterface):
     """ Analyzes clinical data and generates summaries or insights using Gemini. """

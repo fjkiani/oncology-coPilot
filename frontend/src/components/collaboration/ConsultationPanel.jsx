@@ -62,52 +62,37 @@ const ConsultationPanel = ({
 
       if (type === 'chat_message') {
          console.log("[ConsultPanel] Handling chat_message");
-         // Basic example: structure needs to be defined by backend
+         // Need to handle sender being an object
+         const senderName = typeof lastWsMessage.sender === 'object' ? lastWsMessage.sender.name : (lastWsMessage.senderName || 'System');
+         const senderId = typeof lastWsMessage.sender === 'object' ? lastWsMessage.sender.id : (lastWsMessage.senderId || 'system');
          receivedMsg = {
-             senderId: lastWsMessage.senderId || 'system', 
-             senderName: lastWsMessage.senderName || 'System', 
-             text: lastWsMessage.text || JSON.stringify(lastWsMessage), 
+             senderId: senderId,
+             senderName: senderName, 
+             text: lastWsMessage.content || lastWsMessage.text || JSON.stringify(lastWsMessage), // Prioritize content, then text
              timestamp: lastWsMessage.timestamp || Date.now(),
              type: 'chat' // Explicitly set type for rendering
          };
-      } else if (type === 'agent_result') {
-         console.log("[ConsultPanel] Handling agent_result"); // <-- Log entry
-         // Handle results from agent commands
-         const agentResultPayload = lastWsMessage.result;
-         console.log("[ConsultPanel] Agent Result Payload:", agentResultPayload); // <-- Log the nested result
-         const agentOutput = agentResultPayload?.output; 
-         console.log("[ConsultPanel] Agent Output Field:", agentOutput); // <-- Log the output field
-         let agentText = "AI processed the request (no specific output text found)."; // Default text
+      } else if (type === 'agent_response') { // Corrected type check
+         console.log("[ConsultPanel] Handling agent_response"); 
          
-         // Extract meaningful text from known agent outputs
-         if(agentOutput?.summary_text) {
-             agentText = agentOutput.summary_text;
-             console.log("[ConsultPanel] Extracted summary_text:", agentText);
-         } else if (agentOutput?.answer_text) {
-             agentText = agentOutput.answer_text;
-              console.log("[ConsultPanel] Extracted answer_text:", agentText);
-         } else if (agentResultPayload?.summary) {
-             agentText = agentResultPayload.summary;
-             console.log("[ConsultPanel] Extracted fallback summary:", agentText);
-         } else if (agentResultPayload?.message) {
-              agentText = agentResultPayload.message;
-              console.log("[ConsultPanel] Extracted fallback message:", agentText);
-         } else if (typeof agentResultPayload === 'string') {
-              agentText = agentResultPayload;
-              console.log("[ConsultPanel] Result was string:", agentText);
-         } else if (agentResultPayload?.status === 'failure') {
-             agentText = `AI Error: ${agentResultPayload.error_message || 'Unknown error'}`;
-             console.log("[ConsultPanel] Handled failure status:", agentText);
+         let agentText = lastWsMessage.text || "Agent response received, but text is missing."; // Get text directly
+         const agentStatus = lastWsMessage.status || "success"; // Check status
+         const agentName = lastWsMessage.sender || "ai_agent"; // Get agent name from sender field
+         const agentDisplayName = agentName.replace("_", " ").title(); // Format display name
+
+         if(agentStatus === 'failure') {
+             agentText = `AI Error (${agentDisplayName}): ${lastWsMessage.error || agentText}`;
+             console.log("[ConsultPanel] Handled agent failure status:", agentText);
          }
          
          receivedMsg = {
-             senderId: 'ai_agent', 
-             senderName: 'CoPilot AI', 
+             senderId: 'agent', // Use generic 'agent' ID or specific agentName
+             senderName: agentDisplayName, 
              text: agentText,
              timestamp: lastWsMessage.timestamp || Date.now(),
-             type: 'agent' 
+             type: 'agent' // Keep type as 'agent' for styling
          };
-         console.log("[ConsultPanel] Prepared agent message object:", receivedMsg); // <-- Log the final object
+         console.log("[ConsultPanel] Prepared agent message object:", receivedMsg);
       } else if (type === 'error') {
          console.log("[ConsultPanel] Handling error message type");
          receivedMsg = {
@@ -118,8 +103,8 @@ const ConsultationPanel = ({
           receivedMsg = {
              senderId: 'system',
              senderName: 'System',
-             text: lastWsMessage.text || 'System update.',
-             timestamp: Date.now(),
+             text: lastWsMessage.content || 'System update.',
+             timestamp: lastWsMessage.timestamp || Date.now(),
              type: 'system' 
          };
       }
@@ -152,25 +137,59 @@ const ConsultationPanel = ({
 
   // --- Sending Messages & Commands ---
   const handleSendMessage = useCallback(() => {
-    if (!newMessage.trim() || !isWsConnected) return;
+    const messageText = newMessage.trim();
+    if (!messageText || !isWsConnected) return;
 
-    const messageToSend = {
-      type: 'chat_message', // Define specific message type for backend routing
-      room: consultationRoomId,
-      senderId: currentUser.id,
-      senderName: currentUser.name,
-      text: newMessage,
-      timestamp: Date.now()
-    };
+    let messageToSend = null;
 
-    console.log("Sending chat message:", messageToSend);
+    // Check for specific agent commands
+    if (messageText.startsWith('/compare-therapy') || messageText.startsWith('/draft-patient-info')) {
+        // Send the raw command text as a message
+        // The backend's handle_message_for_agent will parse it
+        console.log(`Sending agent command via text: ${messageText}`);
+        messageToSend = {
+            type: 'agent_command_text', // Use a specific type for raw command text
+            roomId: consultationRoomId, // Use roomId from props
+            sender: { // Use sender object
+                id: currentUser.id,
+                name: currentUser.name 
+            },
+            patientId: patientId, // Include patientId from props
+            text: messageText,
+            timestamp: Date.now()
+        };
+    } else {
+        // Standard chat message
+        messageToSend = {
+            type: 'chat_message', 
+            roomId: consultationRoomId, // Use roomId from props
+            sender: { // Use sender object
+                id: currentUser.id,
+                name: currentUser.name 
+            },
+            patientId: patientId, // Include patientId from props
+            content: messageText, // Use 'content' key as expected by backend chat handling
+            text: messageText, // Also keep text for optimistic UI or if backend uses it
+            timestamp: Date.now()
+        };
+    }
+
+    console.log("Sending WebSocket message:", messageToSend);
     sendWsMessage(messageToSend); // Send the structured message object
     setNewMessage(''); // Clear input field
     
-    // Optimistic UI update (optional) - Add message locally immediately
-    // setMessages(prevMessages => [...prevMessages, { ...messageToSend, type: 'chat' }]); 
+    // Optimistic UI update (optional) - Add user's own message locally immediately
+    // if (messageToSend.type === 'chat_message') {
+    //     setMessages(prevMessages => [...prevMessages, { 
+    //         senderId: currentUser.id, 
+    //         senderName: currentUser.name, 
+    //         text: messageText, 
+    //         timestamp: messageToSend.timestamp,
+    //         type: 'chat' 
+    //     }]); 
+    // }
 
-  }, [newMessage, isWsConnected, sendWsMessage, consultationRoomId, currentUser]);
+  }, [newMessage, isWsConnected, sendWsMessage, consultationRoomId, currentUser, patientId]); // Added patientId
 
   const handleSendCommand = useCallback((command, params = {}) => {
       if (!isWsConnected) return;
@@ -197,8 +216,8 @@ const ConsultationPanel = ({
 
   }, [isWsConnected, sendWsMessage, consultationRoomId, currentUser, patientId]); // Added patientId to dependencies
 
-  // Function to send predefined chat messages
-  const handleSendPredefinedMessage = useCallback((text) => {
+  // Function to send predefined chat messages - Added replyingToTimestamp
+  const handleSendPredefinedMessage = useCallback((text, replyingToTimestamp) => {
       if (!isWsConnected) return;
       const messageToSend = {
           type: 'chat_message',
@@ -206,7 +225,8 @@ const ConsultationPanel = ({
           senderId: currentUser.id,
           senderName: currentUser.name,
           text: text, // Use the predefined text
-          timestamp: Date.now()
+          timestamp: Date.now(), // Timestamp of this new message
+          replyingToTimestamp: replyingToTimestamp // Link to the original AI message
       };
       console.log("Sending predefined chat message:", messageToSend);
       sendWsMessage(messageToSend);
@@ -217,7 +237,7 @@ const ConsultationPanel = ({
   const handleKeyPress = (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault(); // Prevent newline
-      handleSendMessage();
+      handleSendMessage(); // Use the updated handleSendMessage
     }
   };
 
@@ -290,14 +310,20 @@ const ConsultationPanel = ({
                       <div style={{ marginTop: '8px', paddingTop: '5px', borderTop: '1px dashed #ccc' }}>
                           <p style={{ fontSize: '0.75em', color: '#444', marginBottom: '4px', fontWeight: '500' }}>Follow-up Actions:</p>
                           <button 
-                              onClick={() => handleSendPredefinedMessage('[System Notification] Dr. B acknowledged glucose trend/A1c. Will continue monitoring.')}
+                              onClick={() => handleSendPredefinedMessage(
+                                  '[System Notification] Dr. B acknowledged glucose trend/A1c. Will continue monitoring.', 
+                                  msg.timestamp // Pass the AI message timestamp
+                              )}
                               style={contextualButtonStyle}
                               title="Send acknowledgment message to chat"
                           >
                               Acknowledge & Monitor
                           </button>
                           <button 
-                              onClick={() => handleSendPredefinedMessage('[System Notification] Dr. B to Dr. A: Glucose trend noted. Thoughts on current management/Metformin?')}
+                              onClick={() => handleSendPredefinedMessage(
+                                  '[System Notification] Dr. B to Dr. A: Glucose trend noted. Thoughts on current management/Metformin?',
+                                  msg.timestamp // Pass the AI message timestamp
+                              )}
                               style={{...contextualButtonStyle, marginLeft: '5px'}}
                               title="Send message to discuss management"
                           >
