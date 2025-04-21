@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel # Import BaseModel
+from pydantic import BaseModel, Field # Import BaseModel and Field
 import json
 import os
 from dotenv import load_dotenv # Import load_dotenv
@@ -13,6 +13,7 @@ import random
 import shlex
 import argparse
 from datetime import datetime
+import logging
 
 # --- Explicitly add project root to sys.path --- 
 # This helps resolve module imports when running with uvicorn from the project root
@@ -37,6 +38,10 @@ from backend.core.llm_utils import get_llm_text_response
 # Import specific agents needed for slash commands
 from backend.agents.comparative_therapy_agent import ComparativeTherapyAgent
 from backend.agents.patient_education_draft_agent import PatientEducationDraftAgent
+from backend.agents.clinical_trial_agent import ClinicalTrialAgent
+
+# Import the new research router
+from backend.research.router import router as research_router
 
 app = FastAPI()
 
@@ -200,7 +205,8 @@ async def get_patient_data(patient_id: str):
     # For MVP, just return the mock data if the ID matches
     patient_data = mock_patient_data_dict.get(patient_id)
     if patient_data:
-        return patient_data
+        # Return the expected structure for the frontend
+        return {"success": True, "data": patient_data} 
     else:
         # Use HTTPException for proper error response
         raise HTTPException(status_code=404, detail="Patient not found")
@@ -467,7 +473,7 @@ async def handle_message_for_agent(message_data: dict, websocket: WebSocket, use
                 agent_response_type = "error"
                 agent_name = "System"
             else:
-                agent_response_type = "patient_edu_draft" # Specific type for this agent
+                agent_response_type = "agent_output" # USE GENERIC SUCCESS TYPE
         except Exception as e:
             print(f"Error in command parsing: {e}")
             result_text = f"Error: {e}"
@@ -479,7 +485,7 @@ async def handle_message_for_agent(message_data: dict, websocket: WebSocket, use
     if agent_name and result_text:
         # Format the agent response
         response_data = {
-            "type": "agent_response",
+            "type": "agent_output", # USE GENERIC SUCCESS TYPE
             "sender": agent_name,
             "status": status,
             "text": result_text,
@@ -683,7 +689,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Parse the command
                 agent_name = None
                 result_text = None
-                agent_response_type = "agent_result" # Default response type
+                agent_response_type = "agent_output" # Default response type
 
                 try:
                     if message_text.startswith("/compare-therapy"):
@@ -782,7 +788,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 else:
                                     # Assume it's a string if not a dict
                                     result_text = str(result)
-                                agent_response_type = "patient_edu_draft" # Specific type for this agent
+                                agent_response_type = "agent_output" # <- USE GENERIC SUCCESS TYPE
                             except ImportError as imp_err:
                                 print(f"ImportError when loading PatientEducationDraftAgent: {imp_err}")
                                 raise
@@ -812,39 +818,28 @@ async def websocket_endpoint(websocket: WebSocket):
                 if agent_name and result_text is not None:
                     timestamp = asyncio.get_event_loop().time()
                     
-                    # For agent_result type (comparative therapy agent)
-                    if agent_response_type == "agent_result":
+                    # Check if it was an error or a successful agent output
+                    if agent_response_type == "error":
                         response_data = {
-                            "type": agent_response_type,
+                            "type": "error",
                             "roomId": room_id,
-                            "agentName": agent_name,
+                            "agentName": agent_name, # Could be "System"
+                            "sender": sender_info,
+                            "timestamp": timestamp,
+                            "message": result_text # Error message content
+                        }
+                    else: # Assume it's a successful "agent_output"
+                        response_data = {
+                            "type": "agent_output", # USE GENERIC SUCCESS TYPE
+                            "roomId": room_id,
+                            "agentName": agent_name, # Actual agent name
                             "sender": sender_info, 
                             "timestamp": timestamp,
-                            "result": result_text
+                            "content": result_text # Agent result content
                         }
-                    # For patient_edu_draft type
-                    elif agent_response_type == "patient_edu_draft":
-                        response_data = {
-                            "type": agent_response_type,
-                            "roomId": room_id,
-                            "agentName": agent_name,
-                            "sender": sender_info,
-                            "timestamp": timestamp,
-                            "draftContent": result_text
-                        }
-                    # For error messages
-                    else:
-                        response_data = {
-                            "type": agent_response_type,
-                            "roomId": room_id,
-                            "agentName": agent_name,
-                            "sender": sender_info,
-                            "timestamp": timestamp,
-                            "message": result_text
-                        }
-                    
-                    # Broadcast the agent's result
-                    print(f"Broadcasting agent ({agent_name}) result to room {room_id}")
+
+                    # Broadcast the agent's result or error
+                    print(f"Broadcasting agent ({agent_name}) message (type: {response_data['type']}) to room {room_id}")
                     await manager.broadcast_to_room(room_id, response_data)
                 else:
                     # This case handles parsing/execution errors where we only send back a personal message
@@ -1007,7 +1002,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     }
                 else:
                     response_payload = {
-                        "type": "agent_result",
+                        "type": "agent_output", # USE GENERIC SUCCESS TYPE
                         "roomId": room_id,
                         "command": command,
                         "result": agent_result or "No result generated.", # Ensure result is not None
@@ -1045,10 +1040,61 @@ async def websocket_endpoint(websocket: WebSocket):
             asyncio.create_task(manager.broadcast_to_room(current_room, leave_message, websocket))
             
 
+# Include the research API router
+app.include_router(research_router, prefix="/api/research", tags=["Research Portal"])
+
 # Simple root endpoint
 @app.get("/")
 async def read_root():
     return {"message": "Beat Cancer AI Backend is running"}
+
+# --- Add Request Model ---
+class TrialSearchRequest(BaseModel):
+    query: str = Field(..., description="The search query text entered by the user.")
+    patient_context: Optional[Dict[str, Any]] = Field(default=None, description="Optional patient context data.")
+
+# --- NEW Clinical Trial Search Endpoint ---
+@app.post("/api/search-trials")
+async def search_clinical_trials(request: TrialSearchRequest):
+    """
+    Endpoint to search for clinical trials using the ClinicalTrialAgent.
+    Receives search query and optional patient context.
+    """
+    logging.info(f"Received trial search request. Query: '{request.query}', Patient Context Provided: {request.patient_context is not None}")
+    
+    agent = ClinicalTrialAgent() # Instantiate the agent
+    
+    # Prepare context and kwargs for the agent
+    # Agent expects patient data under 'patient_data' key in context
+    context = {"patient_data": request.patient_context or {}} 
+    kwargs = {"prompt": request.query, "entities": {}} # Pass query as prompt, assume no pre-parsed entities for now
+    
+    try:
+        result = await agent.run(context=context, **kwargs)
+        logging.info(f"ClinicalTrialAgent Result Status: {result.get('status')}")
+        
+        # Check agent status and return appropriate response
+        if result.get("status") == "success":
+            return {
+                "success": True, 
+                "data": result.get("output", {"found_trials": []}) 
+            }
+        elif result.get("status") == "clarification_needed":
+             # For now, treat clarification needed as no results found, 
+             # could enhance later to pass clarification message back
+              return {
+                "success": True, 
+                "data": {"found_trials": []}, 
+                "message": result.get("summary", "Search criteria unclear.")
+            }
+        else: # failure or other status
+             raise Exception(result.get("summary", "Agent failed to run"))
+             
+    except Exception as e:
+        logging.error(f"Error running ClinicalTrialAgent or processing request: {e}", exc_info=True)
+        # Return a standard error response
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"Failed to search trials: {str(e)}")
 
 # Add logic to run the app if this script is executed directly
 # (e.g., for development/testing)

@@ -1,7 +1,11 @@
 fastapi
 uvicorn[standard]
-google-generativeai
 python-dotenv
+google-generativeai
+decouple # Added for blockchain utils
+web3 # Added for blockchain utils
+requests # Added for blockchain utils
+biopython # For PubMed integration
 # LangChain Core and Integrations
 langchain
-langchain-google-genai 
+langchain-google-genai

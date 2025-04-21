@@ -77,6 +77,8 @@ When working with experimental models like gemini-2.0-flash-thinking-exp-01-21, 
 For options data, use RapidAPI directly instead of the YahooFinanceConnector class to avoid compatibility issues with the OptionChainQuote initialization
 When processing options data from RapidAPI, create a mapping of strikes to straddles for easier lookup and processing of call and put data
 When implementing the display_analysis function in Streamlit, ensure it combines all necessary display components (market overview, ticker analysis, technical insights, learning points) to avoid NameError exceptions
+Python 3.9 requires `typing.Union` and `typing.Tuple` for type hints instead of the `|` operator and `tuple[]` syntax (e.g., use `Tuple[bool, Union[str, None]]`).
+When sending transactions with `web3.py`, the signed transaction object (`signed_tx`) returned by `w3.eth.account.sign_transaction` exposes the raw bytes via the `raw_transaction` attribute (e.g., `w3.eth.send_raw_transaction(signed_tx.raw_transaction)`).
 Scratchpad
 Current Task: Develop an AI Cancer Care CoPilot for Oncologists
 
@@ -232,54 +234,93 @@ Phase 3: Collaboration, Research Platform, Decentralization & Expanded Integrati
   [ ] Integrate Blockchain for Auditing FL Rounds & Rewarding Contributors (Pilot)
   [ ] Develop Decentralized Governance Model Concept (e.g., DAO principles)
 
-**Current Focus: Advanced Consultation Agents (Phase 3 Enhancement)**
-
+**Current Focus: Advanced Consultation Agents (Phase 3 Enhancement)** - COMPLETE
 Implement `ComparativeTherapyAgent` and `PatientEducationDraftAgent` integrated into the real-time consultation feature.
 
-**Plan:**
+*   **ComparativeTherapyAgent - Backend:** [X]
+*   **PatientEducationDraftAgent - Backend:** [X]
+*   **Frontend Integration:** [X]
+*   **Testing & Refinement:** [X]
 
-*   **ComparativeTherapyAgent - Backend:**
-    *   [ ] Create `backend/agents/comparative_therapy_agent.py` module with `ComparativeTherapyAgent` class.
-    *   [ ] Define agent initialization (potentially needs access to data sources/LLM).
-    *   [ ] Implement core `run` or `execute` method:
-        *   [ ] Placeholder for retrieving patient context (needs patient ID).
-        *   [ ] Implement LLM call (Gemini) with a structured prompt for comparing therapies based on input criteria.
-        *   [ ] Placeholder/design for accessing external knowledge bases (if applicable later).
-        *   [ ] Format LLM response into a structured comparison string.
-    *   [ ] Add routing logic in `backend/core/orchestrator.py` to parse `/compare-therapy` command and invoke this agent.
-    *   [ ] Integrate with `backend/core/websocket_manager.py` to send the formatted comparison result back to the specific consultation room.
-    *   [ ] Add error handling.
+--- 
 
-*   **PatientEducationDraftAgent - Backend:**
-    *   [ ] Create `backend/agents/patient_education_draft_agent.py` module with `PatientEducationDraftAgent` class.
-    *   [ ] Define agent initialization (needs LLM access).
-    *   [ ] Implement core `run` or `execute` method:
-        *   [ ] Placeholder for retrieving relevant chat context (topic + maybe recent messages).
-        *   [ ] Implement LLM call (Gemini) with a carefully crafted prompt to generate patient-friendly text for the given topic, emphasizing it's a draft.
-        *   [ ] Format the LLM response, clearly marking it as a draft.
-    *   [ ] Add routing logic in `backend/core/orchestrator.py` to parse `/draft-patient-info` command and invoke this agent.
-    *   [ ] Integrate with `backend/core/websocket_manager.py` to send the formatted draft back to the specific consultation room.
-    *   [ ] Add error handling.
+**Next Major Feature: AI Research Portal for Cancer Cure Discovery**
 
-*   **Frontend Integration:**
-    *   [ ] Modify `ConsultationChat.jsx` (or relevant chat input component):
-        *   [ ] Detect `/compare-therapy` and `/draft-patient-info` commands.
-        *   [ ] Parse arguments from the commands.
-        *   [ ] Send appropriate message structure via WebSocket when a command is entered.
-    *   [ ] Modify WebSocket message handling in frontend:
-        *   [ ] Recognize messages originating from these agents.
-        *   [ ] Display the structured comparison and draft education text correctly within the chat interface (preserving formatting, draft markers).
+**Vision:**
+Develop a dedicated portal within the application to empower cancer researchers AND clinicians by leveraging specialized LLM agents. The goal is to significantly accelerate the research lifecycle AND bridge the gap between complex research findings (especially clinical trials) and actionable clinical insights. Focus on augmenting human capabilities by providing AI-driven interpretation, summarization, and action facilitation.
 
-*   **Testing & Refinement:**
-    *   [ ] Test agent triggers and responses in the consultation UI.
-    *   [ ] Refine LLM prompts for both agents based on output quality.
-    *   [ ] Test error handling scenarios (e.g., invalid commands, LLM failures).
-    *   [ ] Ensure disclaimers and draft markers are prominent.
+**Approach Note:** Use a **Hybrid Data Acquisition Strategy**. 
+1.  **(DONE - Local Load)** NCI API: Use the official API (`https://clinicaltrialsapi.cancer.gov/v1/...`) primarily for *discovering trial IDs* based on search criteria and fetching reliable *structured metadata* (status, phase, title, identifiers). Requires understanding API authentication and query parameters via documentation. - Switched to local JSON + SQLite/ChromaDB for MVP.
+2.  **(DONE - Local Load)** Web Page Scraping/Extraction: Use `firecrawl` (or local parsing) with a defined schema to extract the *detailed text sections* (eligibility, description, objectives, contacts) directly from NCI web pages. - Used regex parsing on local markdown.
+3.  **(DONE - Local Load)** Combined Storage: Merge metadata and extracted text into a **Metadata + Vector Store** (SQLite + ChromaDB for MVP) for efficient agent retrieval.
 
-Phase 4: Deployment & Refinement
-  [ ] Pilot Testing with Oncologists & Researchers
-  [ ] Monitoring, Auditing (including on-chain activities), and Continuous Improvement
-  [ ] Scalability and Maintenance Planning (for both AI and Blockchain components)
+**Concrete Problem Focus:** Address the information overload presented by complex clinical trial descriptions (eligibility criteria, objectives, etc.). The AI CoPilot should act as an intelligent filter and interpretation layer, making this information actionable for clinicians in the context of specific patients.
+
+**MVP Strategy:** Focus on the core pipeline: Load Data -> Store Metadata/Text -> Chunk/Embed Eligibility -> Store Vectors -> Agent Retrieval (using Vector Search for eligibility) -> Display.
+
+**Roadmap (Local Data, MVP Focus):**
+
+*   **Phase 1: Data Foundation & Preparation (Local Data Focus)**
+    *   [X] **1.1 Load Local Trial Data:** Parse `documents.json`.
+    *   [X] **1.2 Define Extraction Logic:** Use regex to extract metadata and text sections (title, status, phase, eligibility, etc.) from markdown.
+    *   [X] **1.3 Design Database Schemas (Local SQLite/ChromaDB):**
+        *   SQLite `clinical_trials` table: `nct_id`, `title`, `status`, `phase`, `inclusion_criteria_text`, `exclusion_criteria_text`, etc.
+        *   ChromaDB collection `clinical_trials_eligibility`: `source_url` (ID), `eligibility_vector`.
+    *   [X] **1.4 Choose DB & Embedding Model:** SQLite, ChromaDB. `all-MiniLM-L6-v2`.
+    *   [X] **1.5 Basic Frontend Shell:** `Research.jsx`, `ResultsDisplay.jsx`.
+
+*   **Phase 2: Pre-processing Pipeline & Local DB Loading**
+    *   **[X] 2.1 Build Pre-processing Pipeline Script (`load_trials_local.py`):**
+        *   Input: `documents.json`.
+        *   Parse markdown using regex.
+        *   Connect to SQLite & ChromaDB.
+        *   `CREATE TABLE IF NOT EXISTS` / `CREATE COLLECTION`.
+        *   `INSERT/UPDATE` structured data into SQLite.
+        *   Chunk eligibility text (Currently embedding whole text for MVP).
+        *   Generate embedding for eligibility text.
+        *   `UPSERT` vector into ChromaDB collection.
+    *   [X] **2.2 Run Script & Verify Data:** Executed script, verified data in SQLite and embeddings in ChromaDB.
+
+*   **Phase 3: Agent Integration & Basic Search**
+    *   [X] **3.1 Adapt Backend Agents (`ClinicalTrialAgent`):**
+        *   Initialize SQLite/ChromaDB connections.
+        *   Embed user query.
+        *   Query ChromaDB for top N trial IDs based on eligibility vector similarity.
+        *   Fetch full details for top N trials from SQLite.
+    *   [X] **3.2 Test End-to-End:** Tested search via frontend, fixed display issues.
+
+*   **Phase 4: Detailed AI Eligibility Assessment (Current Focus)**
+    *   [X] **4.1 Define Structured Patient Profile Schema:** (Conceptual definition: Diagnosis, Stage, ECOG, Labs, Biomarkers, Comorbidities, Prior Tx).
+    *   [ ] **4.2 Implement Patient Data Acquisition:** (Current: Assume passed in `context` for now; Future: Frontend form/EMR).
+    *   [X] **4.3 Integrate LLM Client:** Initialize `google.generativeai` in `ClinicalTrialAgent`.
+    *   [ ] **4.4 Design Eligibility Assessment Prompt:** Define prompt template instructing LLM to compare patient profile vs. criteria.
+    *   [ ] **4.5 Modify `ClinicalTrialAgent.run`:**
+        *   Retrieve patient profile from `context`.
+        *   For each top trial from SQLite:
+            *   Get full inclusion/exclusion text.
+            *   Format prompt (Step 4.4).
+            *   Call LLM API (`self.llm_client.generate_content`).
+            *   Parse LLM response (JSON preferred: summary, met/unmet/unclear criteria).
+            *   Add parsed assessment to trial results dictionary.
+            *   Handle LLM errors/missing data gracefully.
+    *   [ ] **4.6 Update API Endpoint:** Ensure `/api/search-trials` handles patient context input & returns enriched trial data.
+    *   [ ] **4.7 Enhance Frontend (`ResultsDisplay.jsx`):** Display detailed LLM assessment, replacing placeholder.
+
+*   **Phase 5+: Enhancements (Post-MVP)**
+    *   [ ] Refine eligibility chunking/embedding strategy.
+    *   [ ] Implement other agents (`Summarization`, `LiteratureReview`).
+    *   [ ] Add User Roles, Saved Findings.
+    *   [ ] ... (Knowledge Expansion, Collaboration).
+
+**Key Challenges & Considerations:** (Maintain restored list)
+*   **Data Privacy & Security:** Essential for any data, especially potentially sensitive research summaries. Compliance needs constant focus.
+*   **LLM Accuracy & Validation:** Scientific accuracy is paramount. Need RAG, validation, human oversight, clear confidence scoring.
+*   **Domain Specificity:** Requires LLMs deeply trained/fine-tuned on biomedical corpora.
+*   **Data Integration:** Harmonizing diverse scientific databases is complex.
+*   **Ethical Use:** Transparency, bias mitigation, responsible AI principles.
+*   **Scalability & Cost:** Infrastructure for data storage and LLM usage.
+*   **Intellectual Property:** Considerations if researchers use it for novel discoveries.
+*   **User Experience:** Designing an intuitive interface for complex scientific tasks.
 
 Technology Stack Considerations:
 *   Frontend: React, TailwindCSS
@@ -307,6 +348,7 @@ Key Challenges:
 
 Lessons & Design Principles:
 *   **Verify File Existence:** Verify the existence of relevant files/hooks (e.g., `useWebSocket.js`) across the project structure before concluding they are missing, even if not immediately visible in the primary component being edited.
+*   **API-First Development:** For features relying on external data (like the Research Portal), explore and analyze target APIs (PubMed, ClinicalTrials.gov, etc.) *before* designing agent logic or UI components. Understand payloads, query capabilities, and limitations first to inform realistic design.
 *   Use Gemini via Vertex AI for foundational HIPAA-compliant LLM tasks.
 *   Employ a multi-model AI strategy (General + Specialized).
 *   Prioritize HIPAA compliance in all architectural decisions.
@@ -327,6 +369,8 @@ Lessons & Design Principles:
 *   **Agent-Based Architecture:** Design around an orchestrator and specialized agents for task automation.
 *   **Clinician Oversight:** Mandate human review and approval for critical actions initiated by AI agents.
 *   **Gradual Integration:** Implement agents and external API connections iteratively with thorough testing and security reviews.
+*   **API-First / Scrape & Pre-process:** For external data, prefer APIs. If scraping is needed, or for complex API data (like trials), pre-process into efficient stores (Metadata DB + Vector DB) to optimize agent retrieval and analysis.
+*   **Analyze API Response First:** Before designing database schemas or loading scripts for API data, always fetch and analyze a sample response to understand the *exact* structure, field names, and data types provided by the API.
 
 // --- Future Phases / Specialization (Beyond Initial Roadmap) --- 
 
@@ -370,4 +414,4 @@ Development Strategy for Specialization:
 *   When processing options data from RapidAPI, create a mapping of strikes to straddles for easier lookup and processing of call and put data
 *   When implementing the display_analysis function in Streamlit, ensure it combines all necessary display components (market overview, ticker analysis, technical insights, learning points) to avoid NameError exceptions
 *   Python 3.9 requires `typing.Union` and `typing.Tuple` for type hints instead of the `|` operator and `tuple[]` syntax (e.g., use `Tuple[bool, Union[str, None]]`).
-*   When sending transactions with `web3.py`, the signed transaction object (`signed_tx`) returned by `w3.eth.account.sign_transaction` exposes the raw bytes via the `raw_transaction` attribute (e.g., `w3.eth.send_raw_transaction(signed_tx.raw_transaction)`).
+*   When sending transactions with `web3.py`, the signed transaction object (`signed_tx`) returned by `w3.eth.account.sign_transaction`

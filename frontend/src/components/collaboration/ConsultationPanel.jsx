@@ -93,6 +93,19 @@ const ConsultationPanel = ({
              type: 'agent' // Keep type as 'agent' for styling
          };
          console.log("[ConsultPanel] Prepared agent message object:", receivedMsg);
+      } else if (type === 'agent_output') {
+        console.log("[ConsultPanel] Handling generic agent_output");
+        const agentName = lastWsMessage.agentName || "Unknown Agent";
+        // Basic name formatting (can be improved)
+        const agentDisplayName = agentName.replace("Agent", "").replace(/([A-Z])/g, ' $1').trim(); 
+        receivedMsg = {
+            senderId: agentName, 
+            senderName: agentDisplayName, // Show which agent produced the output
+            text: lastWsMessage.content || "Agent output received, but content is missing.", // Get text from 'content' field
+            timestamp: lastWsMessage.timestamp || Date.now(),
+            type: 'agent' // Render as an agent message
+        };
+        console.log("[ConsultPanel] Prepared agent_output message object:", receivedMsg);
       } else if (type === 'error') {
          console.log("[ConsultPanel] Handling error message type");
          receivedMsg = {
@@ -306,7 +319,7 @@ const ConsultationPanel = ({
                   </p>
                   
                   {/* --- Contextual Follow-up Actions --- */}
-                  {msg.type === 'agent_result' && msg.command === 'ask_glucose_trend' && (
+                  {msg.type === 'agent_output' && msg.command === 'ask_glucose_trend' && (
                       <div style={{ marginTop: '8px', paddingTop: '5px', borderTop: '1px dashed #ccc' }}>
                           <p style={{ fontSize: '0.75em', color: '#444', marginBottom: '4px', fontWeight: '500' }}>Follow-up Actions:</p>
                           <button 

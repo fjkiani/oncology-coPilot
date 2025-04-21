@@ -17,7 +17,7 @@ from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 
 # Import the base class
-from core.agent_interface import AgentInterface
+from backend.core.agent_interface import AgentInterface
 
 # --- Tool Definition --- 
 # We define the inputs for our tools using Pydantic models for clarity and validation

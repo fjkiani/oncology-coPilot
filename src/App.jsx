@@ -5,6 +5,7 @@ import { Home, Profile, Onboarding } from "./pages";
 import MedicalRecords from "./pages/records/index";
 import ScreeningSchedule from "./pages/ScreeningSchedule";
 import SingleRecordDetails from "./pages/records/single-record-details";
+import Research from "./pages/Research";
 import { useStateContext } from "./context";
 
 const App = () => {
@@ -20,7 +21,7 @@ const App = () => {
   }, [user, authenticated, ready, login, currentUser, navigate]);
 
   return (
-    <div className="sm:-8 relative flex min-h-screen flex-row bg-[#13131a] p-4">
+    <div className="sm:-8 relative flex min-h-screen flex-row bg-white p-4">
       <div className="relative mr-10 hidden sm:flex">
         <Sidebar />
       </div>
@@ -37,7 +38,13 @@ const App = () => {
             path="/medical-records/:id"
             element={<SingleRecordDetails />}
           />
+          <Route 
+            path="/medical-records/:patientId/research" 
+            element={<Research />} 
+          />
           <Route path="/screening-schedules" element={<ScreeningSchedule />} />
+          <Route path="/research/:patientId" element={<Research />} />
+          <Route path="/research" element={<Research />} />
         </Routes>
       </div>
     </div>

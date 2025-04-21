@@ -7,7 +7,7 @@ import os
 from typing import Any, Dict, Optional
 
 # Import the base class
-from core.agent_interface import AgentInterface
+from backend.core.agent_interface import AgentInterface
 
 # Placeholder: Could use LLM or structured database later
 # import google.generativeai as genai 

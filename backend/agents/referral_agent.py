@@ -10,7 +10,7 @@ from typing import Any, Dict
 import google.generativeai as genai
 
 # Import the base class
-from core.agent_interface import AgentInterface
+from backend.core.agent_interface import AgentInterface
 
 class ReferralAgent(AgentInterface):
     """ Drafts referral letters using Gemini based on context and user request. """

@@ -4,11 +4,12 @@ Agent responsible for drafting and sending notifications.
 
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import google.generativeai as genai
 
 # Import the base class
-from core.agent_interface import AgentInterface
+from backend.core.agent_interface import AgentInterface
+from backend.core.llm_clients import GeminiClient
 
 # Placeholder for potential future integrations (e.g., secure messaging API client)
 
@@ -101,7 +102,6 @@ class NotificationAgent(AgentInterface):
             print(f"Subject: {subject}")
             print(f"Body:\n{body}")
             print("------------------------------------")
-            import asyncio
             await asyncio.sleep(0.1)
 
             return {
