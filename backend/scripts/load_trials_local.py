@@ -9,9 +9,11 @@ from sentence_transformers import SentenceTransformer
 import logging
 from pathlib import Path
 import google.generativeai as genai
+import time
 
 # --- Configuration ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Force DEBUG level logging to see detailed parsing output
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 dotenv_path = Path(__file__).parent.parent / '.env'
 load_dotenv(dotenv_path=dotenv_path)
 
@@ -73,17 +75,84 @@ def get_text_between(text, start_heading, end_heading=None):
     return text[start_pos:end_pos].strip()
 
 def parse_markdown_content(markdown):
-    """Parses the markdown text to extract key sections."""
+    """Parses the markdown text to extract key sections, with more robust eligibility parsing."""
     data = {}
-    data['inclusion_criteria_text'] = get_text_between(markdown, "### Inclusion Criteria", "### Exclusion Criteria")
-    data['exclusion_criteria_text'] = get_text_between(markdown, "### Exclusion Criteria", "## Locations & Contacts")
-    data['description_text'] = get_text_between(markdown, "## Description", "## Eligibility Criteria")
-    data['objectives_text'] = get_text_between(markdown, "## Trial Objectives and Outline", "## Trial Phase & Type")
+    logging.debug("--- Parsing Markdown Start ---")
+
+    # --- More Robust Eligibility Parsing --- 
+    eligibility_block = get_text_between(markdown, "## Eligibility Criteria", "## Locations & Contacts") # Try to get the whole block first
+    inc_text = None
+    exc_text = None
+
+    if eligibility_block:
+        logging.debug("Found ## Eligibility Criteria block.")
+        # Try finding specific subheadings within the block
+        inc_start_match = re.search(r"(?m)^[ \t]*### Inclusion Criteria[ \t]*\n", eligibility_block, re.IGNORECASE)
+        exc_start_match = re.search(r"(?m)^[ \t]*### Exclusion Criteria[ \t]*\n", eligibility_block, re.IGNORECASE)
+        
+        if inc_start_match and exc_start_match:
+            # Found both specific headings
+            logging.debug("Found both ### Inclusion and ### Exclusion Criteria headings.")
+            inc_start_pos = inc_start_match.end()
+            inc_end_pos = exc_start_match.start()
+            inc_text = eligibility_block[inc_start_pos:inc_end_pos].strip()
+            
+            exc_start_pos = exc_start_match.end()
+            # Exclusion text runs to the end of the eligibility_block
+            exc_text = eligibility_block[exc_start_pos:].strip()
+            
+        elif inc_start_match:
+            # Found only Inclusion heading, assume Exclusion follows
+            logging.debug("Found ### Inclusion Criteria, assuming Exclusion follows.")
+            inc_start_pos = inc_start_match.end()
+            # Try to find the *next* heading within the block as the end for inclusion
+            next_heading_match = re.search(r"(?m)^[ \t]*#{3}[ \t]+", eligibility_block[inc_start_pos:], re.IGNORECASE)
+            if next_heading_match:
+                 inc_end_pos = inc_start_pos + next_heading_match.start()
+                 exc_text = eligibility_block[inc_end_pos:].strip() # Assume rest is exclusion
+            else:
+                 inc_end_pos = len(eligibility_block) # Runs to end if no other ### found
+                 exc_text = None # Cannot determine exclusion start
+                 
+            inc_text = eligibility_block[inc_start_pos:inc_end_pos].strip()
+
+        else:
+            # Did not find specific ### headings, treat whole block as combined?
+            # Or maybe just inclusion? This is ambiguous based on current info.
+            # Safest fallback for now: assign to inclusion, leave exclusion None.
+            logging.warning("Could not find specific ### Inclusion/Exclusion headings within ## Eligibility Criteria block. Assigning block to inclusion.")
+            inc_text = eligibility_block # Treat the whole block as inclusion for now
+            exc_text = None
+            
+    else:
+         # Fallback to original method if main ## Eligibility Criteria block isn't found
+         logging.warning("Could not find ## Eligibility Criteria block, falling back to original parsing method.")
+         inc_text = get_text_between(markdown, "### Inclusion Criteria", "### Exclusion Criteria")
+         exc_text = get_text_between(markdown, "### Exclusion Criteria", "## Locations & Contacts")
+         
+    data['inclusion_criteria_text'] = inc_text
+    data['exclusion_criteria_text'] = exc_text
+    logging.debug(f"Extracted Inclusion Criteria (robust): {inc_text[:100] if inc_text else 'None'}...")
+    logging.debug(f"Extracted Exclusion Criteria (robust): {exc_text[:100] if exc_text else 'None'}...")
+    # --- End Robust Eligibility Parsing ---
+    
+    # Extract Description
+    desc_text = get_text_between(markdown, "## Description", "## Eligibility Criteria")
+    data['description_text'] = desc_text
+    logging.debug(f"Extracted Description (raw): {desc_text[:100] if desc_text else 'None'}...")
+    
+    # Extract Objectives
+    obj_text = get_text_between(markdown, "## Trial Objectives and Outline", "## Trial Phase & Type")
+    data['objectives_text'] = obj_text
+    logging.debug(f"Extracted Objectives (raw): {obj_text[:100] if obj_text else 'None'}...")
 
     phase_type_section = get_text_between(markdown, "## Trial Phase & Type", "## Lead Organization")
     if phase_type_section:
         phase_match = re.search(r"\*\*Trial Phase\*\*\s+(.*)", phase_type_section)
         data['phase'] = phase_match.group(1).strip() if phase_match else None
+    else:
+        data['phase'] = None
+        logging.debug("Phase/Type section not found.")
 
     ids_section = get_text_between(markdown, "## Trial IDs", "Share this clinical trial")
     if ids_section:
@@ -91,21 +160,26 @@ def parse_markdown_content(markdown):
         data['primary_id'] = primary_id_match.group(1).strip() if primary_id_match else None
         nct_id_match = re.search(r"- \*\*ClinicalTrials\.gov ID\*\*\s+\[(NCT\d+)\]\(.*\)", ids_section)
         data['nct_id'] = nct_id_match.group(1).strip() if nct_id_match else None
+    else:
+        data['primary_id'] = None
+        data['nct_id'] = None
+        logging.debug("IDs section not found.")
 
     title_match = re.search(r"(?m)^# (.*)", markdown)
     data['title_from_markdown'] = title_match.group(1).strip() if title_match else None
     
-    # Corrected status regex to capture only up to the newline
     status_match = re.search(r"Trial Status:\s*([^\n]+)", markdown) 
     data['status'] = status_match.group(1).strip() if status_match else None
 
+    # Combine eligibility text for embedding (use the potentially updated inc_text/exc_text)
     inc = data.get('inclusion_criteria_text', "") or ""
     exc = data.get('exclusion_criteria_text', "") or ""
     data['eligibility_text'] = f"Inclusion Criteria:\n{inc}\n\nExclusion Criteria:\n{exc}".strip()
 
     if not data.get('title_from_markdown'):
         logging.warning("Could not parse title from markdown H1.")
-
+        
+    logging.debug("--- Parsing Markdown End ---") # Add debug end
     return data
 
 def initialize_sqlite(db_path):
@@ -248,55 +322,43 @@ if __name__ == "__main__":
             
             # --- Generate AI Summary --- 
             ai_summary = "AI summary skipped: LLM client not initialized." # Default
-            if llm_client:
+            if llm_client and parsed_data.get("description_text") and parsed_data.get("objectives_text"):
                 try:
-                    description_text = parsed_data.get('description_text', 'Not available.')
-                    objectives_text = parsed_data.get('objectives_text', 'Not available.')
-                    if description_text != 'Not available.' or objectives_text != 'Not available.':
-                        summary_prompt_text = TRIAL_SUMMARY_PROMPT_TEMPLATE.format(
-                            description=description_text,
-                            objectives=objectives_text
-                        )
-                        summary_response = llm_client.generate_content(
-                            summary_prompt_text,
-                            generation_config=genai.GenerationConfig(temperature=0.3)
-                        )
-                        
-                        # --- Handle potential JSON response from LLM --- 
-                        raw_text = summary_response.text.strip() if summary_response.text else ""
-                        if raw_text:
-                            try:
-                                parsed_json = json.loads(raw_text)
-                                if isinstance(parsed_json, dict):
-                                    # Format a text summary FROM the unexpected JSON
-                                    cond = parsed_json.get('primaryCondition', 'N/A')
-                                    inter = parsed_json.get('intervention', 'N/A')
-                                    pop = parsed_json.get('targetPopulation', 'N/A')
-                                    ai_summary = f"Studies {cond}. Intervention: {inter}. Population: {pop}." 
-                                    logging.warning(f"Trial {source_url}: LLM returned JSON for summary, formatted to text.")
-                                else:
-                                     # It parsed as JSON, but wasn't a dict? Use raw text.
-                                     ai_summary = raw_text 
-                            except json.JSONDecodeError:
-                                # Failed to parse JSON, assume it's the intended plain text
-                                ai_summary = raw_text 
-                        else:
-                            ai_summary = "AI summary generation failed or returned empty."
-                            
-                        logging.debug(f"Trial {source_url}: AI summary stored.")
-                    else:
-                        ai_summary = "AI summary skipped: No description or objectives found."
-                        logging.warning(f"Trial {source_url}: Skipping summary - no description/objectives.")
-                except Exception as summary_err:
-                    logging.error(f"Trial {source_url}: LLM summary generation failed: {summary_err}", exc_info=False) 
-                    ai_summary = f"Error generating AI summary: {summary_err}"
-            
-            # Prepare data for SQLite (including potentially fixed ai_summary)
+                    summary_prompt = TRIAL_SUMMARY_PROMPT_TEMPLATE.format(
+                        description=parsed_data["description_text"],
+                        objectives=parsed_data["objectives_text"]
+                    )
+                    # Simple retry logic
+                    for attempt in range(2):
+                        try:
+                            response = llm_client.generate_content(summary_prompt)
+                            ai_summary = response.text.strip()
+                            logging.info(f"  Successfully generated AI summary for {source_url}.")
+                            break # Success, exit retry loop
+                        except Exception as llm_err:
+                            logging.warning(f"  LLM summarization attempt {attempt+1} failed for {source_url}: {llm_err}")
+                            if attempt == 1: # Last attempt failed
+                                raise llm_err # Re-raise the last error
+                            time.sleep(1) # Wait before retrying
+                except Exception as e:
+                    logging.error(f"  Failed to generate AI summary for {source_url}: {e}")
+                    ai_summary = "AI summary generation failed."
+            elif not llm_client:
+                pass # Keep default message
+            else:
+                logging.warning(f"  Skipping AI summary for {source_url} due to missing description or objectives.")
+                ai_summary = "AI summary skipped: Missing description/objectives."
+
+            # Prepare data for SQLite
+            # Use parsed title first, fallback to metadata title
+            title = parsed_data.get('title_from_markdown') or metadata.get('title', 'Title Not Found')
+            nct_id = parsed_data.get('nct_id') # Get parsed NCT ID
+
             sql_data = (
                 source_url,
-                parsed_data.get('nct_id'),
+                nct_id,
                 parsed_data.get('primary_id'),
-                metadata.get("title") or parsed_data.get('title_from_markdown', 'N/A'),
+                title,
                 parsed_data.get('status'),
                 parsed_data.get('phase'),
                 parsed_data.get('description_text'),
@@ -304,78 +366,91 @@ if __name__ == "__main__":
                 parsed_data.get('exclusion_criteria_text'),
                 parsed_data.get('objectives_text'),
                 parsed_data.get('eligibility_text'),
-                markdown, # Store original markdown
-                json.dumps(metadata), # metadata_json
-                ai_summary # Add the generated/fixed summary
+                markdown,
+                json.dumps(metadata), # Store original metadata
+                ai_summary # Store the generated summary
             )
 
-            # Insert or Replace into SQLite (updated query)
-            # Ensure the number of columns matches the number of placeholders
-            insert_sql = """
-            INSERT OR REPLACE INTO clinical_trials (
-                source_url, nct_id, primary_id, title, status, phase,
-                description_text, inclusion_criteria_text, exclusion_criteria_text,
-                objectives_text, eligibility_text, raw_markdown, metadata_json,
-                ai_summary -- Added column
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?); -- Added placeholder
-            """
-            sql_cursor.execute(insert_sql, sql_data)
+            # Insert/Replace into SQLite
+            sql_cursor.execute("""
+                INSERT OR REPLACE INTO clinical_trials (
+                    source_url, nct_id, primary_id, title, status, phase, 
+                    description_text, inclusion_criteria_text, exclusion_criteria_text, 
+                    objectives_text, eligibility_text, raw_markdown, metadata_json, ai_summary
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, sql_data)
 
             # Prepare data for ChromaDB
-            eligibility_text_to_embed = parsed_data.get('eligibility_text')
-            if eligibility_text_to_embed:
-                # Generate embedding
-                embedding = model.encode([eligibility_text_to_embed])[0].tolist()
-
-                # Add to ChromaDB batch
-                chroma_batch["ids"].append(source_url) # Use source_url as the unique ID
+            eligibility_text = parsed_data.get('eligibility_text', '')
+            if eligibility_text:
+                embedding = model.encode([eligibility_text])[0].tolist()
+                chroma_batch["ids"].append(source_url)
                 chroma_batch["embeddings"].append(embedding)
-                chroma_batch["documents"].append(eligibility_text_to_embed[:500]) # Store snippet as document
-                # Store key metadata for potential filtering in Chroma (optional)
+                chroma_batch["documents"].append(eligibility_text)
+                # --- FIX: Add nct_id to metadata --- 
                 chroma_batch["metadatas"].append({
-                    "title": sql_data[3], # Title from sql_data tuple
-                    "status": sql_data[4],
-                    "phase": sql_data[5]
-                    # Add other relevant metadata if needed for Chroma filtering
+                    "nct_id": nct_id, 
+                    # Add other relevant metadata if needed for filtering later
+                    "source_url": source_url, 
+                    "title": title, 
+                    "status": parsed_data.get('status')
                 })
+                # --- END FIX --- 
             else:
-                logging.warning(f"Trial {source_url}: No eligibility text found for ChromaDB embedding.")
+                logging.warning(f"  Skipping ChromaDB entry for {source_url} due to missing eligibility text.")
 
-            # Upsert batch to ChromaDB if full
+            # Commit SQLite changes periodically (or after loop)
+            if (i + 1) % 50 == 0:
+                sql_conn.commit()
+                logging.info(f"  Committed SQLite changes after {i+1} trials.")
+            
+            # Upsert batch to ChromaDB
             if len(chroma_batch["ids"]) >= chroma_batch_size:
-                logging.info(f"Upserting batch of {len(chroma_batch['ids'])} embeddings to ChromaDB...")
-                chroma_collection.upsert(**chroma_batch)
-                chroma_batch = {"ids": [], "embeddings": [], "documents": [], "metadatas": []} # Reset batch
+                logging.info(f"  Upserting batch of {len(chroma_batch['ids'])} embeddings to ChromaDB...")
+                try:
+                    chroma_collection.upsert(
+                        ids=chroma_batch["ids"],
+                        embeddings=chroma_batch["embeddings"],
+                        documents=chroma_batch["documents"],
+                        metadatas=chroma_batch["metadatas"]
+                    )
+                    logging.info(f"  Successfully upserted batch to ChromaDB.")
+                    # Clear the batch
+                    chroma_batch = {"ids": [], "embeddings": [], "documents": [], "metadatas": []}
+                except Exception as chroma_err:
+                    logging.error(f"  Error upserting batch to ChromaDB: {chroma_err}")
+                    # Decide how to handle batch error - skip batch? retry?
+                    # For simplicity, clear batch and continue
+                    chroma_batch = {"ids": [], "embeddings": [], "documents": [], "metadatas": []}
+                    error_count += chroma_batch_size # Increment error count for the batch
 
             processed_count += 1
-            if (i + 1) % 10 == 0: # Commit more frequently due to LLM calls
-                 logging.info(f"Processed {i+1}/{len(trials_data)} trials (including summaries). Committing...")
-                 sql_conn.commit() 
 
-        except sqlite3.Error as e:
-            logging.error(f"SQLite error processing trial {i+1} ({source_url}): {e}")
-            error_count += 1
         except Exception as e:
-            logging.error(f"General error processing trial {i+1} ({source_url}): {e}", exc_info=True)
+            logging.error(f"Failed to process trial {i+1} ({source_url}): {e}", exc_info=True)
             error_count += 1
 
-    # Upsert any remaining items in the last ChromaDB batch
+    # Upsert any remaining items in the batch
     if chroma_batch["ids"]:
         logging.info(f"Upserting final batch of {len(chroma_batch['ids'])} embeddings to ChromaDB...")
         try:
-            chroma_collection.upsert(**chroma_batch)
-        except Exception as e:
-            logging.error(f"Error upserting final ChromaDB batch: {e}", exc_info=True)
-            error_count += len(chroma_batch["ids"]) # Count these as errors if final upsert fails
+            chroma_collection.upsert(
+                ids=chroma_batch["ids"],
+                embeddings=chroma_batch["embeddings"],
+                documents=chroma_batch["documents"],
+                metadatas=chroma_batch["metadatas"]
+            )
+            logging.info("Successfully upserted final batch to ChromaDB.")
+        except Exception as chroma_err:
+            logging.error(f"Error upserting final batch to ChromaDB: {chroma_err}")
+            error_count += len(chroma_batch["ids"])
 
-    # Final commit and close SQLite connection
-    try:
-        sql_conn.commit()
-        sql_conn.close()
-        logging.info("SQLite connection closed.")
-    except sqlite3.Error as e:
-        logging.error(f"SQLite error during final commit/close: {e}")
+    # Final commit for SQLite
+    sql_conn.commit()
+    logging.info("Final SQLite commit complete.")
+    sql_conn.close()
+    logging.info("SQLite connection closed.")
 
-    logging.info("--- Loading Complete ---")
-    logging.info(f"Successfully processed: {processed_count} trials (check logs for warnings).")
-    logging.info(f"Errors/Skipped trials: {error_count}. Check logs for details.") 
+    logging.info(f"--- Processing complete ---")
+    logging.info(f"Successfully processed: {processed_count} trials")
+    logging.info(f"Errors encountered: {error_count} trials") 

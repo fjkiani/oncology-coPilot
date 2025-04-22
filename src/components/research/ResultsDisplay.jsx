@@ -1,5 +1,5 @@
-import React from 'react';
-import { CheckCircleIcon, XCircleIcon, QuestionMarkCircleIcon, InformationCircleIcon, ExclamationTriangleIcon } from '@heroicons/react/24/solid'; // Using solid icons
+import React, { useState } from 'react';
+import { CheckCircleIcon, XCircleIcon, QuestionMarkCircleIcon, InformationCircleIcon, ExclamationTriangleIcon, ClipboardDocumentCheckIcon, XMarkIcon, DocumentDuplicateIcon, PlusCircleIcon } from '@heroicons/react/24/solid'; // Added icons
 
 // Placeholder action handler
 const handleDraftInquiry = (trialId, patientContext, contactInfo) => {
@@ -14,6 +14,16 @@ const handleDraftInquiry = (trialId, patientContext, contactInfo) => {
 const CriteriaList = ({ title, items, icon: Icon, colorClass, detailKey }) => {
   if (!items || items.length === 0) return null;
 
+  // Helper to determine confidence color
+  const getConfidenceColor = (confidence) => {
+    switch (confidence?.toLowerCase()) {
+      case 'high': return 'text-green-700';
+      case 'medium': return 'text-yellow-700';
+      case 'low': return 'text-red-700';
+      default: return 'text-gray-500';
+    }
+  };
+
   return (
     <div className="mb-3">
       <h6 className={`flex items-center font-semibold text-sm ${colorClass}-800 mb-1`}>
@@ -24,7 +34,17 @@ const CriteriaList = ({ title, items, icon: Icon, colorClass, detailKey }) => {
         {items.map((item, index) => (
           <li key={index} className="text-xs text-gray-700">
             <span className="font-medium">{item.criterion}</span>
-            {item[detailKey] && <span className="text-gray-500 italic ml-1">- {item[detailKey]}</span>}
+            {/* Display Reasoning/Evidence */}
+            {item[detailKey] && 
+              <span className="text-gray-500 italic ml-1">- {item[detailKey]}</span>
+            }
+            {/* --- NEW: Display Confidence --- */}
+            {item.confidence && 
+              <span className={`ml-2 font-semibold ${getConfidenceColor(item.confidence)}`}>
+                (Confidence: {item.confidence})
+              </span>
+            }
+            {/* --- END NEW --- */}
           </li>
         ))}
       </ul>
@@ -33,62 +53,96 @@ const CriteriaList = ({ title, items, icon: Icon, colorClass, detailKey }) => {
 };
 
 // Updated component to render a single Trial Result with detailed AI eligibility
-const InterpretedTrialResult = ({ item, patientContext }) => {
-  const assessment = item.eligibility_assessment;
-  let eligibilityContent;
+const InterpretedTrialResult = ({ item, patientContext, onPlanFollowups }) => {
+  const interpretedResult = item.interpreted_result || {}; // Ensure interpretedResult exists
+  const assessmentStatus = interpretedResult.eligibility_assessment || "Not Assessed"; // Overall status string
+  const narrativeSummary = interpretedResult.narrative_summary || "Summary not available.";
+  const detailedAnalysis = interpretedResult.llm_eligibility_analysis; // The object with inclusion/exclusion lists
+  const actionSuggestions = interpretedResult.action_suggestions || []; // Get suggestions
+  
+  const hasActionSuggestions = actionSuggestions.length > 0;
 
-  if (assessment && typeof assessment === 'object' && !assessment.error && assessment.status !== 'skipped') {
-    // Valid assessment received
+  // --- Handler for Plan Followups button ---
+  const handlePlanFollowupsClick = () => {
+     if (onPlanFollowups && hasActionSuggestions) {
+         onPlanFollowups(actionSuggestions); // Pass suggestions to parent handler
+     } else {
+         console.error("onPlanFollowups handler not provided or no suggestions exist.");
+         alert("Cannot plan followups."); 
+     }
+  };
+
+  let eligibilityContent;
+  let overallStatusColor = "text-gray"; // Default color
+
+  // Determine color based on overall assessment status
+  if (assessmentStatus.toLowerCase().includes("likely eligible")) {
+    overallStatusColor = "text-green";
+  } else if (assessmentStatus.toLowerCase().includes("likely ineligible")) {
+    overallStatusColor = "text-red";
+  } else if (assessmentStatus.toLowerCase().includes("unclear")) {
+    overallStatusColor = "text-yellow";
+  } else if (assessmentStatus.toLowerCase().includes("failed")) {
+     overallStatusColor = "text-red";
+  }
+
+  // Render detailed breakdown if available
+  if (detailedAnalysis && typeof detailedAnalysis === 'object') {
+    // --- FIX: Access criteria lists from the nested eligibility_assessment object --- 
+    const eligibilityAssessment = detailedAnalysis.eligibility_assessment || {};
+    // --- END FIX ---
     eligibilityContent = (
-      <div className="text-sm">
-        <p className="font-semibold mb-2 text-gray-800">{assessment.eligibility_summary || 'No overall summary provided.'}</p>
+      <div className="text-sm mt-2"> {/* Added margin top */}
+        {/* Use analysis from eligibilityAssessment */}
         <CriteriaList 
-          title="Met Criteria" 
-          items={assessment.met_criteria} 
+          title="Met Inclusion / Did Not Meet Exclusion" 
+          items={eligibilityAssessment.met_criteria || []}
           icon={CheckCircleIcon} 
           colorClass="text-green"
-          detailKey="evidence"
+          detailKey="reasoning"
         />
         <CriteriaList 
-          title="Unmet Criteria" 
-          items={assessment.unmet_criteria} 
+          title="Did Not Meet Inclusion / Met Exclusion" 
+          items={eligibilityAssessment.unmet_criteria || []}
           icon={XCircleIcon} 
           colorClass="text-red"
           detailKey="reasoning"
         />
-        <CriteriaList 
-          title="Unclear Criteria" 
-          items={assessment.unclear_criteria} 
-          icon={QuestionMarkCircleIcon} 
-          colorClass="text-yellow"
-          detailKey="missing_info"
-        />
+        <div className="relative"> {/* Container for list and button */}
+          <CriteriaList 
+            title="Unclear Criteria" 
+            items={eligibilityAssessment.unclear_criteria || []}
+            icon={QuestionMarkCircleIcon} 
+            colorClass="text-yellow"
+            detailKey="reasoning" // Use reasoning which should explain missing info
+          />
+          {/* Button for Planning Followups */}
+          {hasActionSuggestions && (
+            <button
+              onClick={handlePlanFollowupsClick} 
+              className="absolute top-0 right-0 px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded hover:bg-purple-200"
+              title="Plan Follow-up Actions for Unclear Items"
+            >
+              Plan Follow-ups
+            </button>
+          )}
+        </div>
       </div>
     );
-  } else if (assessment && assessment.status === 'skipped') {
-    // Assessment was skipped
+  } else if (assessmentStatus.includes("Not Assessed") || assessmentStatus.includes("Failed")) {
+    // Handle specific statuses where detailed breakdown is missing/irrelevant
     eligibilityContent = (
-      <p className="flex items-center text-sm text-gray-600">
-         <InformationCircleIcon className="h-4 w-4 mr-1.5 text-gray-400" />
-         <span>AI Check Skipped: {assessment.reason || 'Reason not specified.'}</span>
-      </p>
-    );
-  } else if (assessment && assessment.error) {
-    // Error during assessment
-     eligibilityContent = (
-      <p className="flex items-center text-sm text-red-700">
-        <ExclamationTriangleIcon className="h-4 w-4 mr-1.5 text-red-500" />
-        <span>AI Check Error: {assessment.error || 'An unknown error occurred.'}</span>
+      <p className={`flex items-center text-sm ${overallStatusColor}-700 mt-2`}>
+         {assessmentStatus.includes("Failed") ? 
+           <ExclamationTriangleIcon className={`h-4 w-4 mr-1.5 ${overallStatusColor}-500`} /> : 
+           <InformationCircleIcon className={`h-4 w-4 mr-1.5 ${overallStatusColor}-400`} />
+         }
+         <span>{assessmentStatus}</span>
       </p>
     );
   } else {
-    // Default placeholder if assessment is missing entirely
-     eligibilityContent = (
-      <p className="flex items-center text-sm text-gray-600">
-        <InformationCircleIcon className="h-4 w-4 mr-1.5 text-gray-400" />
-        <span>Eligibility analysis pending or not available.</span>
-      </p>
-    );
+     // Fallback if detailedAnalysis is somehow missing but status is not 'Not Assessed/Failed'
+     eligibilityContent = <p className="text-sm text-gray-500 mt-2">Detailed breakdown not available.</p>;
   }
 
   return (
@@ -114,32 +168,27 @@ const InterpretedTrialResult = ({ item, patientContext }) => {
         <span> Phase: {item.phase || 'N/A'}</span>
       </div>
 
-      {/* Detailed AI Eligibility Assessment */}
+      {/* --- Display Overall Assessment Status --- */}
+       <div className={`mb-2 font-semibold ${overallStatusColor}-700`}>
+         AI Eligibility Status: {assessmentStatus}
+       </div>
+       
+      {/* --- Display Narrative Summary --- */}
+      <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-3 text-sm text-blue-800">
+         <h5 className="font-semibold mb-1">AI Narrative Summary:</h5>
+         <p>{narrativeSummary}</p>
+      </div>
+
+      {/* --- Display Detailed Eligibility Breakdown --- */}
       <div className="bg-gray-50 border border-gray-200 rounded p-3 mb-3">
-        <h5 className="font-semibold text-sm text-gray-800 mb-2">AI Eligibility Check:</h5>
+        <h5 className="font-semibold text-sm text-gray-800 mb-1">Eligibility Criteria Details:</h5>
         {eligibilityContent}
-      </div>
-
-      {/* AI Summary (Now uses backend field) */}
-      <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4">
-        <h5 className="font-semibold text-sm text-blue-800 mb-1">AI Summary:</h5>
-        <p className="text-sm text-blue-700">{item.ai_summary || 'Summary generation pending or not available.'}</p>
-      </div>
-
-      {/* Action Button */}
-      <div className="flex justify-end">
-        <button 
-          onClick={() => handleDraftInquiry(item.nct_id || item.source_url, patientContext, item.contactInfo)}
-          className="px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-        >
-          Draft Inquiry to Contact
-        </button>
       </div>
     </li>
   );
 };
 
-const ResultsDisplay = ({ results, patientContext }) => {
+const ResultsDisplay = ({ results, patientContext, onPlanFollowups }) => {
   // No loading state needed here as it's handled in the parent Research.jsx
 
   if (!results) {
@@ -159,7 +208,8 @@ const ResultsDisplay = ({ results, patientContext }) => {
           <InterpretedTrialResult 
             key={item.source_url || index}
             item={item} 
-            patientContext={patientContext} // Pass patient context down
+            patientContext={patientContext} 
+            onPlanFollowups={onPlanFollowups}
           />
         ))}
       </ul>

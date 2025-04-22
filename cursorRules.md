@@ -225,11 +225,11 @@ Phase 3: Collaboration, Research Platform, Decentralization & Expanded Integrati
                   2.  Present draft in chat for clinician review/editing before sending.
       *   **Technical Considerations:**
           *   May require more state management than simple Q&A.
-          *   Could potentially leverage agent frameworks like LangChain or Autogen for multi-step logic if needed, or implement directly in Python. 
+          *   Could potentially leverage agent frameworks like LangChain or Autogen for multi-step logic if needed, or implement directly in Python.
           *   Needs clear UI triggers (buttons or specific commands like `/deepdive-glucose`).
   [ ] Develop Secure, Anonymized/Aggregated Data Sharing for Research (leveraging FL principles)
   [ ] **Integrate with Production APIs** (Scheduling, Messaging, EHR Orders, etc. - Requires Partnerships/Access)
-  [ ] Build Research Collaboration Workspace/Tools 
+  [ ] Build Research Collaboration Workspace/Tools
   [ ] Implement Federated Learning Infrastructure (Coordination Layer)
   [ ] Integrate Blockchain for Auditing FL Rounds & Rewarding Contributors (Pilot)
   [ ] Develop Decentralized Governance Model Concept (e.g., DAO principles)
@@ -293,7 +293,7 @@ Develop a dedicated portal within the application to empower cancer researchers 
     *   [X] **4.1 Define Structured Patient Profile Schema:** (Conceptual definition: Diagnosis, Stage, ECOG, Labs, Biomarkers, Comorbidities, Prior Tx).
     *   [ ] **4.2 Implement Patient Data Acquisition:** (Current: Assume passed in `context` for now; Future: Frontend form/EMR).
     *   [X] **4.3 Integrate LLM Client:** Initialize `google.generativeai` in `ClinicalTrialAgent`.
-    *   [ ] **4.4 Design Eligibility Assessment Prompt:** Define prompt template instructing LLM to compare patient profile vs. criteria.
+    *   [ ] **4.4 Design Eligibility Assessment Prompt:** Define prompt template instructing LLM to compare patient profile vs. criteria. **<- STARTING HERE**
     *   [ ] **4.5 Modify `ClinicalTrialAgent.run`:**
         *   Retrieve patient profile from `context`.
         *   For each top trial from SQLite:
@@ -306,9 +306,40 @@ Develop a dedicated portal within the application to empower cancer researchers 
     *   [ ] **4.6 Update API Endpoint:** Ensure `/api/search-trials` handles patient context input & returns enriched trial data.
     *   [ ] **4.7 Enhance Frontend (`ResultsDisplay.jsx`):** Display detailed LLM assessment, replacing placeholder.
 
-*   **Phase 5+: Enhancements (Post-MVP)**
+*   **Phase 5: Actionability & Refinement (Next Steps)**
+    *   [ ] **5.1 Combine Eligibility/Summary LLM Call:**
+        *   Define new prompt asking for structured eligibility (met/unmet/unclear) AND a patient-specific narrative summary in one JSON output.
+        *   Modify `ClinicalTrialAgent.run` to use single LLM call per trial.
+        *   Remove runtime summary generation logic (pre-computation no longer needed for this approach).
+        *   Update frontend `ResultsDisplay` to show the new narrative summary.
+        *   **(Efficiency Gain: Reduces LLM calls per search)**
+    *   [ ] **5.2 Parallelize Eligibility Calls:**
+        *   Modify `ClinicalTrialAgent.run` loop to use `asyncio.gather` to run the combined LLM calls for all top N trials concurrently.
+        *   **(Efficiency Gain: Reduces wall-clock time for LLM processing)**
+    *   [X] **5.3 Enhance Frontend for Actionability (MVP Checklist):**
+        *   [X] 5.3.1 ...
+        *   [X] 5.3.6 ... (Marked complete, but UI was modified for planning flow)
+    *   [ ] **5.4 Agentic Workflow - Drafting Actions (Revised Flow):**
+        *   [ ] **5.4.1 Define Planning Agent/Logic:** Create backend function/agent (`PlanningAgent`?) that receives `action_suggestions` + `patientContext`.
+            *   Purpose: Analyze suggestions holistically, potentially prioritize/consolidate, assign initial Kanban column (`followUpNeeded`), and format into Kanban task objects.
+            *   (Future): Could add hints for the next agent/role needed for each task.
+            *   (MVP): Start with rule-based logic; consider LLM for advanced planning later.
+        *   [X] **5.4.2 Create Backend Endpoint:** Implement a new endpoint (e.g., `/api/plan-followups`) that takes trial `source_url`, `action_suggestions`, `patientContext` and calls the Planning Agent/Logic, returning a list of Kanban task objects. **(MVP Implemented)**
+        *   [X] **5.4.3 Modify Frontend Trigger:**
+            *   Change the "Actions" button in `ResultsDisplay.jsx` to "Plan Follow-ups".
+            *   Update its `onClick` handler to call the new `/api/plan-followups` endpoint, sending the relevant `action_suggestions` and `patientContext`.
+            *   Remove the old modal popup logic triggered by this button. **(Done)**
+        *   [X] **5.4.4 Add Tasks to Kanban:** In the frontend callback for the API call, use the existing `addTask` (or a new `addMultipleTasks`) function in `Research.jsx` to add the returned tasks to the Kanban board state. **(Done)**
+        *   [ ] **5.4.5 Enhance Kanban Task Display:** (Optional) Show more context on the Kanban card (e.g., related trial ID).
+        *   [ ] **5.4.6 Agentic Task Execution (Future):**
+            *   Implement logic triggered by Kanban actions (e.g., dragging a task to "Ready for Draft") that calls specific drafting agents (`PatientMessageDraftAgent`, `LabOrderDraftAgent`, etc.).
+            *   Requires UI for reviewing/approving agent drafts.
+        *   [ ] **5.4.7 EMR Integration via API (Future - High Complexity):** ... (Keep existing details)
+        *   [ ] **5.4.8 Clinician Review Workflow:** ... (Keep existing details)
+
+*   **Phase 6+: Enhancements (Post-MVP)**
     *   [ ] Refine eligibility chunking/embedding strategy.
-    *   [ ] Implement other agents (`Summarization`, `LiteratureReview`).
+    *   [ ] Implement other agents (`LiteratureReview`).
     *   [ ] Add User Roles, Saved Findings.
     *   [ ] ... (Knowledge Expansion, Collaboration).
 

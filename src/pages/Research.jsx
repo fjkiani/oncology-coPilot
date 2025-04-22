@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
+import { arrayMove } from "@dnd-kit/sortable";
 
 // Assuming components are in src/components/research/
 import SearchBar from '../components/research/SearchBar';
 import ResultsDisplay from '../components/research/ResultsDisplay';
+import KanbanBoard from '../components/KanbanBoard';
 
 // Placeholder data structure anticipating agent outputs
 const placeholderTrial = {
@@ -28,6 +30,20 @@ const placeholderTrial = {
   sourceUrl: 'https://www.cancer.gov/research/participate/clinical-trials-search/v?id=NCI-2021-08397'
 };
 
+// Default Columns for Kanban
+const defaultCols = [
+  { id: "followUpNeeded", title: "Follow-up Needed" },
+  { id: "inProgress", title: "In Progress" },
+  { id: "done", title: "Done" },
+];
+
+// Helper to generate simple IDs (replace with better method if needed)
+const generateId = () => Math.floor(Math.random() * 10001);
+
+// LocalStorage keys
+const KANBAN_COLUMNS_KEY = 'kanbanColumns';
+const KANBAN_TASKS_KEY = 'kanbanTasks';
+
 const Research = () => {
   const { patientId } = useParams(); // Get patientId if navigating from EMR
   const [searchQuery, setSearchQuery] = useState('');
@@ -35,6 +51,43 @@ const Research = () => {
   const [isLoading, setIsLoading] = useState(false); // Combined loading state
   const [error, setError] = useState(null);
   const [patientData, setPatientData] = useState(null); // State for full patient data
+  const [columns, setColumns] = useState(() => {
+    const savedCols = localStorage.getItem(KANBAN_COLUMNS_KEY);
+    return savedCols ? JSON.parse(savedCols) : defaultCols;
+  });
+  const [tasks, setTasks] = useState(() => {
+    const savedTasks = localStorage.getItem(KANBAN_TASKS_KEY);
+    // Filter tasks specific to this patient context (or show all if no patientId)
+    const allTasks = savedTasks ? JSON.parse(savedTasks) : [];
+    return allTasks.filter(task => !patientId || task.patientId === patientId);
+  });
+
+  // Save state to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem(KANBAN_COLUMNS_KEY, JSON.stringify(columns));
+  }, [columns]);
+
+  useEffect(() => {
+    // When tasks change, update localStorage but only for the *full* task list
+    // Need to load ALL tasks, update the relevant ones, then save all back
+    const allTasksSaved = localStorage.getItem(KANBAN_TASKS_KEY);
+    const allTasks = allTasksSaved ? JSON.parse(allTasksSaved) : [];
+    // Create map of current patient tasks for easy update
+    const currentPatientTasksMap = new Map(tasks.filter(t => t.patientId === patientId).map(t => [t.id, t]));
+    // Filter out old tasks for this patient and add updated ones
+    const updatedAllTasks = allTasks
+        .filter(task => task.patientId !== patientId) // Remove old tasks for this patient
+        .concat(tasks.filter(task => task.patientId === patientId)); // Add current tasks for this patient
+    
+    localStorage.setItem(KANBAN_TASKS_KEY, JSON.stringify(updatedAllTasks));
+  }, [tasks, patientId]); // Depend on tasks and patientId
+  
+  // Reload tasks when patientId changes
+  useEffect(() => {
+    const savedTasks = localStorage.getItem(KANBAN_TASKS_KEY);
+    const allTasks = savedTasks ? JSON.parse(savedTasks) : [];
+    setTasks(allTasks.filter(task => !patientId || task.patientId === patientId));
+  }, [patientId]); // Only reload tasks when patientId changes
 
   // Effect to fetch patient data if patientId exists
   useEffect(() => {
@@ -74,6 +127,160 @@ const Research = () => {
     }
   }, [patientId]); // Rerun when patientId changes
 
+  // --- Add Task Function (from Checklist Modal) ---
+  const addTask = useCallback((taskText) => {
+    if (!taskText) return;
+    const newTask = {
+      id: generateId(), // Use helper
+      columnId: "followUpNeeded", // Default column
+      content: taskText,
+      patientId: patientId || null 
+    };
+    setTasks(prevTasks => [...prevTasks, newTask]);
+    console.log('Kanban Task Added:', newTask); 
+  }, [patientId]); // Depend on patientId to associate task
+
+  // --- Kanban Handler Functions ---
+  const handleCreateColumn = useCallback(() => {
+    const newColumn = {
+      id: generateId(),
+      title: `Column ${columns.length + 1}`,
+    };
+    setColumns(prev => [...prev, newColumn]);
+  }, [columns.length]);
+
+  const handleDeleteColumn = useCallback((id) => {
+    setColumns(prev => prev.filter((col) => col.id !== id));
+    // Also delete tasks in that column
+    setTasks(prev => prev.filter((task) => task.columnId !== id));
+  }, []);
+
+  const handleUpdateColumn = useCallback((id, title) => {
+    setColumns(prev => prev.map((col) => (col.id === id ? { ...col, title } : col)));
+  }, []);
+
+  const handleCreateTask = useCallback((columnId) => {
+     const newTask = {
+      id: generateId(),
+      columnId,
+      content: `New Task`, // Simple default content
+      patientId: patientId || null
+    };
+    setTasks(prev => [...prev, newTask]);
+  }, [patientId]);
+
+  const handleDeleteTask = useCallback((id) => {
+    setTasks(prev => prev.filter((task) => task.id !== id));
+  }, []);
+
+  const handleUpdateTask = useCallback((id, content) => {
+    setTasks(prev => prev.map((task) => task.id === id ? { ...task, content } : task));
+  }, []);
+
+  const handleTaskMove = useCallback((active, over) => {
+      // Handles both reordering within a column and moving between columns
+      setTasks((prevTasks) => {
+          const activeIndex = prevTasks.findIndex((t) => t.id === active.id);
+          const overIndex = prevTasks.findIndex((t) => t.id === over.id);
+
+          if (activeIndex === -1) return prevTasks; // Should not happen
+
+          let newTasks = [...prevTasks];
+
+          if (over.data.current?.type === "Column") {
+              // Dropping Task onto a Column
+              if (overIndex === -1) { // Check if over.id is a column ID
+                 newTasks[activeIndex].columnId = over.id; 
+                 // Move to the end of the list logically, dnd-kit handles visual
+                 return arrayMove(newTasks, activeIndex, newTasks.length -1); 
+              } 
+          }
+          
+          if (over.data.current?.type === "Task") { 
+              // Dropping Task onto another Task
+              if (overIndex === -1) return prevTasks; // Should not happen
+
+              if (newTasks[activeIndex].columnId !== newTasks[overIndex].columnId) {
+                  // Moving to a different column
+                  newTasks[activeIndex].columnId = newTasks[overIndex].columnId;
+                  return arrayMove(newTasks, activeIndex, overIndex);
+              } else {
+                 // Reordering within the same column
+                 return arrayMove(newTasks, activeIndex, overIndex);
+              }
+          }
+          
+          return prevTasks; // Return previous state if drop target is invalid
+      });
+  }, []);
+  // --- End Kanban Handlers ---
+
+  // --- NEW: Handler for Planning Follow-ups --- 
+  const handlePlanFollowups = async (actionSuggestions) => {
+    if (!actionSuggestions || actionSuggestions.length === 0) {
+      console.log("No action suggestions provided to plan follow-ups.");
+      setError("No action suggestions available to create follow-up tasks.");
+      return;
+    }
+    
+    console.log("Planning follow-ups based on suggestions:", actionSuggestions);
+    setIsLoading(true); // Indicate activity
+    setError(null);
+
+    try {
+        // Endpoint URL (placeholder - will need to be created in backend)
+        const apiUrl = 'http://localhost:8000/api/plan-followups'; 
+        
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ 
+                action_suggestions: actionSuggestions,
+                patient_id: patientId // Send patient context if available
+            }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ detail: 'Failed to plan follow-ups.'}));
+            throw new Error(errorData.detail || `HTTP error! Status: ${response.status}`);
+        }
+
+        const result = await response.json();
+
+        // Assuming the API returns { success: true, planned_tasks: [...] } 
+        if (result.success && Array.isArray(result.planned_tasks)) {
+            console.log("Received planned tasks:", result.planned_tasks);
+            
+            // Add patientId to each task if not already present and patientId exists
+            const tasksToAdd = result.planned_tasks.map(task => ({
+                 ...task, // Expecting { id, content, columnId }
+                 id: task.id || generateId(), // Ensure ID exists
+                 columnId: task.columnId || 'followUpNeeded', // Default column if missing
+                 patientId: task.patientId || patientId || null // Assign current patient context
+            }));
+
+            // Add new tasks to the existing tasks state
+            setTasks(prevTasks => [
+                ...prevTasks,
+                ...tasksToAdd
+            ]);
+            console.log("Follow-up tasks added to Kanban board.");
+        } else {
+            throw new Error(result.message || 'Invalid response format from planning endpoint.');
+        }
+
+    } catch (err) {
+        console.error("Error planning follow-ups:", err);
+        setError(`Failed to plan follow-ups: ${err.message}`);
+    } finally {
+        setIsLoading(false);
+    }
+  };
+  // --- END NEW HANDLER ---
+
+  // Function to handle search triggered by SearchBar
   const handleSearch = async (query) => {
     if (!query) {
       setError('Please enter a search query.');
@@ -133,7 +340,7 @@ const Research = () => {
     }
   };
 
-  // --- NEW: Function to handle search triggered by button ---
+  // Function to handle search triggered by button
   const handlePatientContextSearch = () => {
     if (!patientData) {
       setError("Cannot search by context: Patient data not loaded.");
@@ -181,12 +388,34 @@ const Research = () => {
         </button>
       </div>
 
+      {/* --- NEW: Kanban Board --- */}
+      <div className="mt-6 mb-6">
+         <h3 className="text-lg font-semibold mb-3 text-gray-700">Follow-up Task Board</h3>
+         <KanbanBoard 
+            columns={columns}
+            tasks={tasks} // Pass the filtered tasks for the current context
+            onColumnsChange={setColumns} // Pass state setter directly for column order
+            onTasksChange={handleTaskMove} // Pass specific handler for task moves
+            onCreateColumn={handleCreateColumn}
+            onDeleteColumn={handleDeleteColumn}
+            onUpdateColumn={handleUpdateColumn}
+            onCreateTask={handleCreateTask} // For adding new tasks directly to board
+            onDeleteTask={handleDeleteTask}
+            onUpdateTask={handleUpdateTask}
+         />
+      </div>
+
       <div className="mt-6">
          {/* Simplified loading/error display - ResultsDisplay handles empty/error states related to search itself */}
         {isLoading && <p className="text-center text-gray-500">Loading...</p>}
         {error && !isLoading && <p className="text-center text-red-500">Error: {error}</p>} 
         {!isLoading && (
-          <ResultsDisplay results={searchResults} patientContext={patientData} />
+          <ResultsDisplay 
+            results={searchResults} 
+            patientContext={patientData} 
+            onAddTask={addTask} // This now adds a task to the Kanban state
+            onPlanFollowups={handlePlanFollowups} // <-- Pass new handler
+          />
         )}
       </div>
     </div>

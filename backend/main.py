@@ -1051,33 +1051,51 @@ async def read_root():
 # --- Add Request Model ---
 class TrialSearchRequest(BaseModel):
     query: str = Field(..., description="The search query text entered by the user.")
-    patient_context: Optional[Dict[str, Any]] = Field(default=None, description="Optional patient context data.")
+    # Use the more specific PatientContext model defined later
+    patient_context: Optional['PatientContext'] = Field(default=None, description="Optional patient context data.")
 
-# --- NEW Clinical Trial Search Endpoint ---
+# --- NEW Clinical Trial Search Endpoint --- 
 @app.post("/api/search-trials")
 async def search_clinical_trials(request: TrialSearchRequest):
     """
     Endpoint to search for clinical trials using the ClinicalTrialAgent.
     Receives search query and optional patient context.
+    
+    *** DEVELOPMENT NOTE: Mock data removed. Agent call re-enabled. ***
     """
     logging.info(f"Received trial search request. Query: '{request.query}', Patient Context Provided: {request.patient_context is not None}")
     
+    # --- MOCK DATA (Commented Out) --- 
+    # mock_action_suggestions = [...]
+    # mock_found_trial = {...}
+    # mock_result_data = {...}
+    # return {
+    #     "success": True, 
+    #     "data": mock_result_data 
+    # }
+    # --- END MOCK DATA ---
+
+    # --- Original Agent Call (Re-enabled) ---
     agent = ClinicalTrialAgent() # Instantiate the agent
     
     # Prepare context and kwargs for the agent
     # Agent expects patient data under 'patient_data' key in context
-    context = {"patient_data": request.patient_context or {}} 
-    kwargs = {"prompt": request.query, "entities": {}} # Pass query as prompt, assume no pre-parsed entities for now
+    context = {"patient_data": request.patient_context.dict() if request.patient_context else {}} 
+    kwargs = {"prompt": request.query} # Pass query as prompt
     
     try:
+        # Run the agent asynchronously
         result = await agent.run(context=context, **kwargs)
         logging.info(f"ClinicalTrialAgent Result Status: {result.get('status')}")
         
         # Check agent status and return appropriate response
         if result.get("status") == "success":
+            # Ensure the output format matches frontend expectations
+            agent_output = result.get("output", {})
+            found_trials = agent_output.get("found_trials", [])
             return {
                 "success": True, 
-                "data": result.get("output", {"found_trials": []}) 
+                "data": { "found_trials": found_trials } # Return trials under data.found_trials
             }
         elif result.get("status") == "clarification_needed":
              # For now, treat clarification needed as no results found, 
@@ -1087,14 +1105,125 @@ async def search_clinical_trials(request: TrialSearchRequest):
                 "data": {"found_trials": []}, 
                 "message": result.get("summary", "Search criteria unclear.")
             }
-        else: # failure or other status
-             raise Exception(result.get("summary", "Agent failed to run"))
+        else: # error or other status
+             logging.error(f"ClinicalTrialAgent run failed: {result.get('summary')}")
+             raise HTTPException(
+                status_code=500, 
+                detail=result.get("summary", "Agent failed to run")
+            )
              
     except Exception as e:
         logging.error(f"Error running ClinicalTrialAgent or processing request: {e}", exc_info=True)
         # Return a standard error response
-        from fastapi import HTTPException
         raise HTTPException(status_code=500, detail=f"Failed to search trials: {str(e)}")
+    # --- End Original Agent Call ---
+
+# --- Data Models ---
+class PatientContext(BaseModel):
+    # Define fields based on what Research.jsx sends
+    # Example: Adjust according to actual patientData structure
+    diagnosis: Optional[Dict[str, Any]] = None
+    demographics: Optional[Dict[str, Any]] = None
+    labs: Optional[List[Dict[str, Any]]] = None
+    # Add other relevant fields as needed
+    # Make fields Optional if they might not always be present
+
+class TrialSearchRequest(BaseModel):
+    query: str
+    patient_context: Optional[PatientContext] = None # Use the refined model
+
+class ConsultationRequest(BaseModel):
+    room_id: str
+    prompt: str
+    focus: Optional[str] = None # Context for the agent
+    current_history: Optional[List[Dict[str, Any]]] = None # For context aware agents
+    replying_to_timestamp: Optional[str] = None # Track message lineage
+
+# --- NEW: Model for Planning Request ---
+class ActionSuggestion(BaseModel):
+    # Updated to match the structure sent from the frontend (ClinicalTrialAgent output)
+    action_type: str         # e.g., 'TASK', 'PATIENT_MESSAGE_SUGGESTION'
+    draft_text: str          # Pre-drafted text for the action
+    suggestion: str          # Concise description of the suggestion
+    criterion: str           # The related trial criterion text
+    missing_info: str        # Explanation of what information is missing
+    # suggestion_id: Optional[str] = None # Add if agent starts providing unique IDs
+    # priority: Optional[str] = None # Add if agent starts providing priority
+
+class PlanFollowupsRequest(BaseModel):
+    action_suggestions: List[ActionSuggestion]
+    patient_context: Optional[PatientContext] = None
+    # source_url: Optional[str] = None # Optionally pass trial context
+# --- End New Model ---
+
+# --- Placeholder Planning Agent Logic ---
+
+async def plan_followups_logic(suggestions: List[ActionSuggestion], patient_context: Optional[PatientContext]) -> List[Dict[str, Any]]:
+    """
+    Placeholder logic for the Planning Agent.
+    Takes action suggestions and patient context, returns structured Kanban tasks.
+    MVP: Converts each 'TASK' suggestion into a basic task.
+    Future: Implement more sophisticated planning, prioritization, consolidation.
+    """
+    tasks = []
+    for i, suggestion in enumerate(suggestions):
+        # Only create Kanban tasks for suggestions marked as 'TASK'
+        if suggestion.action_type == 'TASK':
+            # Use the 'suggestion' field for more concise task content
+            # Or combine fields if needed: f"{suggestion.suggestion} (Criterion: {suggestion.criterion[:50]}...)"
+            task_content = suggestion.suggestion 
+            
+            # Try to generate a more stable ID if possible, otherwise use index
+            # Hashing suggestion text could work but might be too long/complex
+            task_id = f"task_{i}_{int(time.time())}" # Use timestamp for more uniqueness than just index
+            
+            # Extract patient ID if available
+            patient_mrn = None
+            if patient_context and patient_context.demographics:
+                 # Assuming 'mrn' or 'patientId' might be in demographics
+                 patient_mrn = patient_context.demographics.get('patientId') or patient_context.demographics.get('mrn')
+
+            tasks.append({
+                "id": task_id,
+                "columnId": "followUpNeeded", # Default starting column
+                "content": task_content,
+                "patientId": patient_mrn, 
+                "suggestion_type": suggestion.action_type,
+                "related_criterion": suggestion.criterion # Keep related criterion for context
+            })
+        else:
+            print(f"Skipping suggestion with action_type '{suggestion.action_type}': {suggestion.suggestion[:50]}...")
+            
+    print(f"Generated {len(tasks)} Kanban tasks from {len(suggestions)} suggestions.")
+    return tasks
+
+# --- NEW: Endpoint for Planning Follow-ups ---
+@app.post("/api/plan-followups")
+async def api_plan_followups(request: PlanFollowupsRequest):
+    """
+    Receives action suggestions and patient context, uses Planning Agent logic
+    to generate Kanban tasks, and returns them.
+    """
+    print(f"Received request to plan follow-ups for {len(request.action_suggestions)} suggestions.")
+    try:
+        # In the future, might pass this to a dedicated PlanningAgent class/instance
+        planned_tasks = await plan_followups_logic(request.action_suggestions, request.patient_context)
+        
+        return {
+            "success": True,
+            "message": f"Successfully planned {len(planned_tasks)} follow-up tasks.",
+            "tasks": planned_tasks
+        }
+    except Exception as e:
+        print(f"Error during follow-up planning: {e}", file=sys.stderr)
+        # Log the full traceback for debugging
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to plan follow-up tasks: {str(e)}"
+        )
+# --- End New Endpoint ---
 
 # Add logic to run the app if this script is executed directly
 # (e.g., for development/testing)
