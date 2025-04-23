@@ -2,10 +2,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { arrayMove } from "@dnd-kit/sortable";
 
-// Assuming components are in src/components/research/
+// Components
 import SearchBar from '../components/research/SearchBar';
 import ResultsDisplay from '../components/research/ResultsDisplay';
 import KanbanBoard from '../components/KanbanBoard';
+import PatientTrialMatchView from '../components/research/PatientTrialMatchView'; // Import the detail view
 
 // Placeholder data structure anticipating agent outputs
 const placeholderTrial = {
@@ -51,20 +52,71 @@ const Research = () => {
   const [isLoading, setIsLoading] = useState(false); // Combined loading state
   const [error, setError] = useState(null);
   const [patientData, setPatientData] = useState(null); // State for full patient data
+  
+  // --- State for the Detail View --- 
+  const [detailViewContext, setDetailViewContext] = useState(null); // Stores { patientData, trialItem }
+  // --- End State --- 
+  
+  // --- Column State Initialization --- 
   const [columns, setColumns] = useState(() => {
     const savedCols = localStorage.getItem(KANBAN_COLUMNS_KEY);
-    return savedCols ? JSON.parse(savedCols) : defaultCols;
+    let initialCols = defaultCols; // Default value
+    if (savedCols) {
+      try {
+        // Attempt to parse, use default if fails or empty
+        const parsedCols = JSON.parse(savedCols);
+        if (Array.isArray(parsedCols) && parsedCols.length > 0) {
+          initialCols = parsedCols;
+        } 
+      } catch (error) {
+         // Ignore error, will use defaultCols
+         console.error("Kanban: Error parsing columns from localStorage, using defaults:", error);
+      }
+    }
+    return initialCols;
   });
+  // --- End Column Initialization --- 
+
+  // --- Task State Initialization ---
   const [tasks, setTasks] = useState(() => {
     const savedTasks = localStorage.getItem(KANBAN_TASKS_KEY);
-    // Filter tasks specific to this patient context (or show all if no patientId)
-    const allTasks = savedTasks ? JSON.parse(savedTasks) : [];
-    return allTasks.filter(task => !patientId || task.patientId === patientId);
+    let initialTasks = [];
+    if (savedTasks) {
+        try {
+            const parsedTasks = JSON.parse(savedTasks);
+            if (Array.isArray(parsedTasks)) {
+                initialTasks = parsedTasks;
+            }
+        } catch (error) {
+            console.error("Kanban: Error parsing tasks from localStorage, using empty list:", error);
+        }
+    }
+    // Filter tasks specific to this patient context AFTER loading all
+    return initialTasks.filter(task => !patientId || task.patientId === patientId);
   });
+  // --- End Task Initialization ---
+
+  // --- Effect to Verify Columns on Mount --- 
+  useEffect(() => {
+    const hasFollowUpNeeded = columns.some(col => col.id === "followUpNeeded");
+    if (!hasFollowUpNeeded) {
+      console.warn("Kanban State Verification: 'followUpNeeded' column missing. Resetting columns to default and saving.");
+      setColumns(defaultCols);
+      localStorage.setItem(KANBAN_COLUMNS_KEY, JSON.stringify(defaultCols));
+    }
+    // We might also want to verify 'inProgress' and 'done' if they are essential
+  }, []); // Empty dependency array ensures this runs only once on mount
+  // --- End Verification Effect --- 
 
   // Save state to localStorage whenever it changes
   useEffect(() => {
-    localStorage.setItem(KANBAN_COLUMNS_KEY, JSON.stringify(columns));
+    // Only save if columns state is valid (e.g., has the default needed column)
+    if (columns.some(col => col.id === "followUpNeeded")) { 
+      localStorage.setItem(KANBAN_COLUMNS_KEY, JSON.stringify(columns));
+    } else {
+      // Avoid saving an invalid state back to localStorage
+      console.warn("Kanban: Attempted to save invalid columns state to localStorage. Aborted.");
+    }
   }, [columns]);
 
   useEffect(() => {
@@ -216,30 +268,37 @@ const Research = () => {
   // --- End Kanban Handlers ---
 
   // --- NEW: Handler for Planning Follow-ups --- 
-  const handlePlanFollowups = async (actionSuggestions) => {
-    if (!actionSuggestions || actionSuggestions.length === 0) {
+  const handlePlanFollowups = async (followupData) => {
+    // Destructure the data passed from ResultsDisplay
+    const { suggestions, trialId, trialTitle } = followupData;
+
+    if (!suggestions || suggestions.length === 0) {
       console.log("No action suggestions provided to plan follow-ups.");
       setError("No action suggestions available to create follow-up tasks.");
       return;
     }
     
-    console.log("Planning follow-ups based on suggestions:", actionSuggestions);
+    console.log(`Planning follow-ups for Trial ${trialId} based on suggestions:`, suggestions);
     setIsLoading(true); // Indicate activity
     setError(null);
 
     try {
-        // Endpoint URL (placeholder - will need to be created in backend)
         const apiUrl = 'http://localhost:8000/api/plan-followups'; 
         
+        // Prepare the request body including the new trial info
+        const requestBody = {
+            action_suggestions: suggestions,
+            patient_id: patientId,
+            trial_id: trialId,       // Add trialId
+            trial_title: trialTitle  // Add trialTitle
+        };
+
         const response = await fetch(apiUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ 
-                action_suggestions: actionSuggestions,
-                patient_id: patientId // Send patient context if available
-            }),
+            body: JSON.stringify(requestBody), // Send the full request body
         });
 
         if (!response.ok) {
@@ -338,6 +397,9 @@ const Research = () => {
     } finally {
         setIsLoading(false); // Ensure loading state is turned off
     }
+    
+    // Clear detail view on new search
+    setDetailViewContext(null);
   };
 
   // Function to handle search triggered by button
@@ -361,9 +423,63 @@ const Research = () => {
     handleSearch(diagnosis);
   };
 
+  // --- Handler to show Detail View when Kanban card is clicked ---
+  const handleViewTaskDetails = async (task) => {
+    console.log("handleViewTaskDetails called for task:", task);
+    if (!task.trial_id || !patientData) {
+      console.error("Cannot view details: Missing trial ID on task or patient data not loaded.");
+      alert("Could not load details for this task: Missing context.");
+      return;
+    }
+
+    // --- Fetch specific trial details + analysis --- 
+    setIsLoading(true); // Use main loading indicator for now
+    setError(null);
+    try {
+      const apiUrl = `/api/trial-details/${task.trial_id}?patientId=${task.patientId}`;
+      console.log(`Fetching trial details from: ${apiUrl}`);
+      const response = await fetch(apiUrl);
+      
+      if (!response.ok) {
+         const errorData = await response.json().catch(() => ({ detail: `HTTP error! Status: ${response.status}` }));
+         throw new Error(errorData.detail || `Failed to fetch details for trial ${task.trial_id}`);
+      }
+      
+      const result = await response.json();
+      
+      if (result.success && result.data) {
+          console.log("Received trial detail data:", result.data);
+          // Set the context for the detail view
+          setDetailViewContext({ 
+              patientData: patientData, 
+              trialItem: result.data // Use the fetched, combined data
+          }); 
+      } else {
+          throw new Error(result.message || `Invalid response format when fetching details for trial ${task.trial_id}`);
+      }
+
+    } catch (err) {
+        console.error(`Error fetching details for trial ${task.trial_id}:`, err);
+        setError(`Failed to load details for trial ${task.trial_id}: ${err.message}`);
+        setDetailViewContext(null); // Clear context on error
+    } finally {
+        setIsLoading(false);
+    }
+    // --- End Fetch --- 
+  };
+  
+  // --- Handler to close Detail View ---
+  const handleCloseDetailView = () => {
+      setDetailViewContext(null); 
+      setError(null); // Also clear error when closing manually
+  };
+
+  // --- Render Logic --- 
   return (
-    <div className="research-container p-4 md:p-6">
+    <div className="research-container p-4 md:p-6 bg-gray-50">
       <h1 className="text-2xl font-bold mb-4 text-gray-800">Research Portal</h1>
+      
+      {/* Patient Context Banner */}      
       {patientId && patientData && // Show patient ID only if data loaded successfully
         <p className="mb-4 text-sm text-gray-600">Showing research relevant to Patient ID: {patientId} ({patientData.demographics?.name || 'Name N/A'})</p>
       }
@@ -371,53 +487,71 @@ const Research = () => {
          <p className="mb-4 text-sm text-red-600">Could not load data for Patient ID: {patientId}. Proceeding without context.</p>
       }
       
-      {/* --- Search Area --- */}
-      <div className="search-controls mb-6 flex flex-col sm:flex-row items-start gap-3">
-        {/* Search Bar takes full width on small, less on larger */}
-        <div className="flex-grow w-full sm:w-auto">
-          <SearchBar onSearch={handleSearch} isLoading={isLoading} />
-        </div>
-        
-        {/* Context Search Button - only enabled if patientData exists */}
-        <button
-          onClick={handlePatientContextSearch}
-          disabled={!patientData || isLoading} // Disable if no patient or already loading
-          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed w-full sm:w-auto whitespace-nowrap"
-        >
-          Find Trials for This Patient
-        </button>
-      </div>
-
-      {/* --- NEW: Kanban Board --- */}
-      <div className="mt-6 mb-6">
-         <h3 className="text-lg font-semibold mb-3 text-gray-700">Follow-up Task Board</h3>
-         <KanbanBoard 
-            columns={columns}
-            tasks={tasks} // Pass the filtered tasks for the current context
-            onColumnsChange={setColumns} // Pass state setter directly for column order
-            onTasksChange={handleTaskMove} // Pass specific handler for task moves
-            onCreateColumn={handleCreateColumn}
-            onDeleteColumn={handleDeleteColumn}
-            onUpdateColumn={handleUpdateColumn}
-            onCreateTask={handleCreateTask} // For adding new tasks directly to board
-            onDeleteTask={handleDeleteTask}
-            onUpdateTask={handleUpdateTask}
-         />
-      </div>
-
-      <div className="mt-6">
-         {/* Simplified loading/error display - ResultsDisplay handles empty/error states related to search itself */}
-        {isLoading && <p className="text-center text-gray-500">Loading...</p>}
-        {error && !isLoading && <p className="text-center text-red-500">Error: {error}</p>} 
-        {!isLoading && (
-          <ResultsDisplay 
-            results={searchResults} 
-            patientContext={patientData} 
-            onAddTask={addTask} // This now adds a task to the Kanban state
-            onPlanFollowups={handlePlanFollowups} // <-- Pass new handler
+      {/* Conditionally render Detail View OR Main Layout */}      
+      {detailViewContext ? (
+          // Show Detail View
+          <PatientTrialMatchView 
+              trialItem={detailViewContext.trialItem}
+              patientContext={detailViewContext.patientData}
+              onClose={handleCloseDetailView} 
           />
-        )}
-      </div>
+      ) : (
+          // Show Main Layout
+          <>
+            {/* Search Area */}          
+            <div className="search-controls mb-6 flex flex-col sm:flex-row items-start gap-3">
+              {/* Search Bar takes full width on small, less on larger */}
+              <div className="flex-grow w-full sm:w-auto">
+                <SearchBar onSearch={handleSearch} isLoading={isLoading} />
+              </div>
+              
+              {/* Context Search Button - only enabled if patientData exists */}
+              <button
+                onClick={handlePatientContextSearch}
+                disabled={!patientData || isLoading} // Disable if no patient or already loading
+                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed w-full sm:w-auto whitespace-nowrap"
+              >
+                Find Trials for This Patient
+              </button>
+            </div>
+
+            {/* Display Loading / Error (related to search) / Results */}            
+            {isLoading && searchResults.length === 0 && !error && <div className="text-center p-6 text-gray-500">Searching for trials...</div>}
+            {/* Display search error separately from loading */}            
+            {error && !isLoading && <div className="text-center p-6 text-red-600">Error: {error}</div>} 
+            {!isLoading && searchResults.length > 0 && (
+              <ResultsDisplay 
+                results={searchResults} 
+                patientContext={patientData} 
+                onPlanFollowups={handlePlanFollowups} 
+               />
+            )}
+            {!isLoading && !error && searchQuery && searchResults.length === 0 && (
+                <div className="text-center p-6 text-gray-500">No matching trials found for "{searchQuery}".</div>
+            )}
+            
+            {/* Kanban Board */}            
+            {patientId && (
+                <div className="mt-8 mb-6 border-t pt-6">
+                 <h3 className="text-lg font-semibold mb-3 text-gray-700">Follow-up Task Board</h3>
+                 <KanbanBoard 
+                    columns={columns}
+                    tasks={tasks} 
+                    onColumnsChange={setColumns} 
+                    onTasksChange={handleTaskMove} 
+                    onCreateColumn={handleCreateColumn}
+                    onDeleteColumn={handleDeleteColumn}
+                    onUpdateColumn={handleUpdateColumn}
+                    onCreateTask={handleCreateTask}
+                    onDeleteTask={handleDeleteTask}
+                    onUpdateTask={handleUpdateTask}
+                    onViewTaskDetails={handleViewTaskDetails} 
+                 />
+               </div>
+            )}
+          </>
+      )}
+      
     </div>
   );
 };

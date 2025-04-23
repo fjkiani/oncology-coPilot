@@ -11,7 +11,7 @@ const handleDraftInquiry = (trialId, patientContext, contactInfo) => {
 };
 
 // Helper function to render criteria lists
-const CriteriaList = ({ title, items, icon: Icon, colorClass, detailKey }) => {
+const CriteriaList = ({ title, items, icon: Icon, colorClass, detailKey = 'reasoning' }) => {
   if (!items || items.length === 0) return null;
 
   // Helper to determine confidence color
@@ -26,7 +26,7 @@ const CriteriaList = ({ title, items, icon: Icon, colorClass, detailKey }) => {
 
   return (
     <div className="mb-3">
-      <h6 className={`flex items-center font-semibold text-sm ${colorClass}-800 mb-1`}>
+      <h6 className={`flex items-center font-semibold text-sm ${colorClass}-700 mb-1`}>
         <Icon className={`h-4 w-4 mr-1.5 ${colorClass}-600`} />
         {title} ({items.length})
       </h6>
@@ -45,7 +45,7 @@ const CriteriaList = ({ title, items, icon: Icon, colorClass, detailKey }) => {
               </span>
             }
             {/* --- END NEW --- */}
-          </li>
+  </li>
         ))}
       </ul>
     </div>
@@ -54,69 +54,71 @@ const CriteriaList = ({ title, items, icon: Icon, colorClass, detailKey }) => {
 
 // Updated component to render a single Trial Result with detailed AI eligibility
 const InterpretedTrialResult = ({ item, patientContext, onPlanFollowups }) => {
-  const interpretedResult = item.interpreted_result || {}; // Ensure interpretedResult exists
-  const assessmentStatus = interpretedResult.eligibility_assessment || "Not Assessed"; // Overall status string
+  const interpretedResult = item.interpreted_result || {};
+  const assessmentStatus = interpretedResult.eligibility_assessment || "Not Assessed";
   const narrativeSummary = interpretedResult.narrative_summary || "Summary not available.";
-  const detailedAnalysis = interpretedResult.llm_eligibility_analysis; // The object with inclusion/exclusion lists
-  const actionSuggestions = interpretedResult.action_suggestions || []; // Get suggestions
-  
+  const detailedAnalysis = interpretedResult.llm_eligibility_analysis;
+  const eligibilityAssessment = detailedAnalysis?.eligibility_assessment || {};
+  const metCriteria = eligibilityAssessment.met_criteria || [];
+  const unmetCriteria = eligibilityAssessment.unmet_criteria || [];
+  const unclearCriteria = eligibilityAssessment.unclear_criteria || [];
+  const actionSuggestions = interpretedResult.action_suggestions || []; // Needed for button
   const hasActionSuggestions = actionSuggestions.length > 0;
 
-  // --- Handler for Plan Followups button ---
+  // Handler for Plan Followups button
   const handlePlanFollowupsClick = () => {
      if (onPlanFollowups && hasActionSuggestions) {
-         onPlanFollowups(actionSuggestions); // Pass suggestions to parent handler
+         onPlanFollowups({ 
+             suggestions: actionSuggestions, 
+             trialId: item.nct_id, 
+             trialTitle: item.title 
+         }); 
      } else {
          console.error("onPlanFollowups handler not provided or no suggestions exist.");
          alert("Cannot plan followups."); 
      }
   };
 
-  let eligibilityContent;
-  let overallStatusColor = "text-gray"; // Default color
-
-  // Determine color based on overall assessment status
+  // --- Determine Status Color (same as before) ---
+  let overallStatusColor = "text-gray"; 
+  let overallStatusBg = "bg-gray-100";
+  // ... (status color logic) ...
   if (assessmentStatus.toLowerCase().includes("likely eligible")) {
-    overallStatusColor = "text-green";
+    overallStatusColor = "text-green-700"; overallStatusBg = "bg-green-100";
   } else if (assessmentStatus.toLowerCase().includes("likely ineligible")) {
-    overallStatusColor = "text-red";
+    overallStatusColor = "text-red-700"; overallStatusBg = "bg-red-100";
   } else if (assessmentStatus.toLowerCase().includes("unclear")) {
-    overallStatusColor = "text-yellow";
+    overallStatusColor = "text-yellow-700"; overallStatusBg = "bg-yellow-100";
   } else if (assessmentStatus.toLowerCase().includes("failed")) {
-     overallStatusColor = "text-red";
+     overallStatusColor = "text-red-700"; overallStatusBg = "bg-red-100";
   }
+  // --- End Status Color ---
 
-  // Render detailed breakdown if available
+  // --- Render Eligibility Content Inline --- 
+  let eligibilityContent;
   if (detailedAnalysis && typeof detailedAnalysis === 'object') {
-    // --- FIX: Access criteria lists from the nested eligibility_assessment object --- 
-    const eligibilityAssessment = detailedAnalysis.eligibility_assessment || {};
-    // --- END FIX ---
     eligibilityContent = (
-      <div className="text-sm mt-2"> {/* Added margin top */}
-        {/* Use analysis from eligibilityAssessment */}
+      <div className="text-sm mt-2">
         <CriteriaList 
-          title="Met Inclusion / Did Not Meet Exclusion" 
-          items={eligibilityAssessment.met_criteria || []}
+          title="Met Criteria"
+          items={metCriteria}
           icon={CheckCircleIcon} 
           colorClass="text-green"
-          detailKey="reasoning"
         />
         <CriteriaList 
-          title="Did Not Meet Inclusion / Met Exclusion" 
-          items={eligibilityAssessment.unmet_criteria || []}
+          title="Unmet Criteria"
+          items={unmetCriteria}
           icon={XCircleIcon} 
           colorClass="text-red"
-          detailKey="reasoning"
         />
-        <div className="relative"> {/* Container for list and button */}
+        <div className="relative"> {/* Container for list and button */}        
           <CriteriaList 
-            title="Unclear Criteria" 
-            items={eligibilityAssessment.unclear_criteria || []}
+            title="Unclear Criteria"
+            items={unclearCriteria}
             icon={QuestionMarkCircleIcon} 
             colorClass="text-yellow"
-            detailKey="reasoning" // Use reasoning which should explain missing info
           />
-          {/* Button for Planning Followups */}
+          {/* Button for Planning Followups - Positioned relative to Unclear List */}          
           {hasActionSuggestions && (
             <button
               onClick={handlePlanFollowupsClick} 
@@ -129,58 +131,47 @@ const InterpretedTrialResult = ({ item, patientContext, onPlanFollowups }) => {
         </div>
       </div>
     );
-  } else if (assessmentStatus.includes("Not Assessed") || assessmentStatus.includes("Failed")) {
-    // Handle specific statuses where detailed breakdown is missing/irrelevant
-    eligibilityContent = (
-      <p className={`flex items-center text-sm ${overallStatusColor}-700 mt-2`}>
+  } else {
+    // Fallback/Error display
+    eligibilityContent = <p className={`flex items-center text-sm ${overallStatusColor}-700 mt-2`}>
          {assessmentStatus.includes("Failed") ? 
            <ExclamationTriangleIcon className={`h-4 w-4 mr-1.5 ${overallStatusColor}-500`} /> : 
            <InformationCircleIcon className={`h-4 w-4 mr-1.5 ${overallStatusColor}-400`} />
          }
          <span>{assessmentStatus}</span>
-      </p>
-    );
-  } else {
-     // Fallback if detailedAnalysis is somehow missing but status is not 'Not Assessed/Failed'
-     eligibilityContent = <p className="text-sm text-gray-500 mt-2">Detailed breakdown not available.</p>;
+      </p>;
   }
+  // --- End Eligibility Content --- 
 
   return (
-    <li className="mb-6 border border-gray-200 rounded-lg p-4 shadow-sm">
-      {/* Title and Source Link */}
+    <li className="mb-4 border border-gray-200 rounded-lg p-4 shadow-sm bg-white">
+      {/* Top Row: Title, Status Badge */}
       <div className="flex justify-between items-start mb-2">
-        <h4 className="text-lg font-semibold text-blue-700">{item.title || 'No Title'}</h4>
-        <a 
-          href={item.source_url || '#'}
-          target="_blank" 
-          rel="noopener noreferrer"
-          className="text-xs text-blue-500 hover:underline whitespace-nowrap ml-4"
-        >
-          View Full Source
-        </a>
+        {/* Left side: Title and Trial Info */}
+        <div className="flex-grow mr-4">
+           <h4 className="text-base font-semibold text-blue-700 mb-0.5">{item.title || 'No Title'}</h4>
+           <div className="text-xs text-gray-600">
+              <span>NCT ID: {item.nct_id || 'N/A'}</span> |
+              <span> Status: {item.status ? item.status.replace(/\n.*/, '').trim() : 'N/A'}</span> |
+              <span> Phase: {item.phase || 'N/A'}</span>
+            </div>
+        </div>
+        {/* Right side: Status Badge */}        
+        <div className="flex items-center flex-shrink-0">
+           <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${overallStatusBg} ${overallStatusColor}`}> 
+              {assessmentStatus}
+           </span>
+        </div>
       </div>
 
-      {/* Key Details */}
-      <div className="text-xs text-gray-600 mb-3">
-        <span>NCT ID: {item.nct_id || 'N/A'}</span> |
-        {/* Clean up status display if needed */}
-        <span> Status: {item.status ? item.status.replace(/\n.*/, '').trim() : 'N/A'}</span> |
-        <span> Phase: {item.phase || 'N/A'}</span>
-      </div>
-
-      {/* --- Display Overall Assessment Status --- */}
-       <div className={`mb-2 font-semibold ${overallStatusColor}-700`}>
-         AI Eligibility Status: {assessmentStatus}
-       </div>
-       
-      {/* --- Display Narrative Summary --- */}
-      <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-3 text-sm text-blue-800">
-         <h5 className="font-semibold mb-1">AI Narrative Summary:</h5>
+      {/* --- Inline Narrative Summary --- */}      
+      <div className="bg-blue-50 border border-blue-100 rounded p-3 mb-3 text-sm text-blue-800">
+         <h5 className="font-semibold mb-1 text-xs">AI Narrative Summary:</h5>
          <p>{narrativeSummary}</p>
       </div>
 
-      {/* --- Display Detailed Eligibility Breakdown --- */}
-      <div className="bg-gray-50 border border-gray-200 rounded p-3 mb-3">
+      {/* --- Inline Eligibility Breakdown --- */}      
+      <div className="bg-gray-50 border border-gray-100 rounded p-3">
         <h5 className="font-semibold text-sm text-gray-800 mb-1">Eligibility Criteria Details:</h5>
         {eligibilityContent}
       </div>
@@ -206,10 +197,10 @@ const ResultsDisplay = ({ results, patientContext, onPlanFollowups }) => {
       <ul>
         {results.map((item, index) => (
           <InterpretedTrialResult 
-            key={item.source_url || index}
+            key={item.source_url || item.nct_id || index} 
             item={item} 
             patientContext={patientContext} 
-            onPlanFollowups={onPlanFollowups}
+            onPlanFollowups={onPlanFollowups} // Pass the handler down
           />
         ))}
       </ul>

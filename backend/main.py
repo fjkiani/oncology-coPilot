@@ -1142,88 +1142,162 @@ class ConsultationRequest(BaseModel):
 # --- NEW: Model for Planning Request ---
 class ActionSuggestion(BaseModel):
     # Updated to match the structure sent from the frontend (ClinicalTrialAgent output)
-    action_type: str         # e.g., 'TASK', 'PATIENT_MESSAGE_SUGGESTION'
-    draft_text: str          # Pre-drafted text for the action
-    suggestion: str          # Concise description of the suggestion
-    criterion: str           # The related trial criterion text
-    missing_info: str        # Explanation of what information is missing
-    # suggestion_id: Optional[str] = None # Add if agent starts providing unique IDs
-    # priority: Optional[str] = None # Add if agent starts providing priority
+    action_type: str = Field(..., description="Category of suggestion, e.g., TASK, PATIENT_MESSAGE_SUGGESTION") # Renamed from category
+    suggestion: str = Field(..., description="Concise text of the suggested action")
+    draft_text: Optional[str] = Field(default=None, description="Pre-drafted text for messages, tasks, etc.")
+    criterion: Optional[str] = Field(default=None, description="The related trial criterion text") # Renamed from criterion_text
+    missing_info: Optional[str] = Field(default=None, description="Explanation of what information is missing, if any") # Added field
 
 class PlanFollowupsRequest(BaseModel):
     action_suggestions: List[ActionSuggestion]
-    patient_context: Optional[PatientContext] = None
-    # source_url: Optional[str] = None # Optionally pass trial context
-# --- End New Model ---
+    patient_id: Optional[str] = None # Match the key sent from frontend
+    trial_id: Optional[str] = None   # Added: ID of the trial context
+    trial_title: Optional[str] = None # Added: Title of the trial context
 
 # --- Placeholder Planning Agent Logic ---
 
-async def plan_followups_logic(suggestions: List[ActionSuggestion], patient_context: Optional[PatientContext]) -> List[Dict[str, Any]]:
+async def plan_followups_logic(
+    suggestions: List[ActionSuggestion], 
+    patient_id: Optional[str], 
+    trial_id: Optional[str],      # Added parameter
+    trial_title: Optional[str]    # Added parameter
+) -> List[Dict[str, Any]]: 
     """
     Placeholder logic for the Planning Agent.
-    Takes action suggestions and patient context, returns structured Kanban tasks.
-    MVP: Converts each 'TASK' suggestion into a basic task.
+    Takes action suggestions, patient ID, and trial context, returns structured Kanban tasks.
+    MVP: Converts suggestions (potentially filtering by type later) into basic tasks.
     Future: Implement more sophisticated planning, prioritization, consolidation.
     """
     tasks = []
+    logging.debug(f"plan_followups_logic received {len(suggestions)} suggestions for patient ID: {patient_id}, trial ID: {trial_id}")
     for i, suggestion in enumerate(suggestions):
-        # Only create Kanban tasks for suggestions marked as 'TASK'
-        if suggestion.action_type == 'TASK':
-            # Use the 'suggestion' field for more concise task content
-            # Or combine fields if needed: f"{suggestion.suggestion} (Criterion: {suggestion.criterion[:50]}...)"
-            task_content = suggestion.suggestion 
-            
-            # Try to generate a more stable ID if possible, otherwise use index
-            # Hashing suggestion text could work but might be too long/complex
-            task_id = f"task_{i}_{int(time.time())}" # Use timestamp for more uniqueness than just index
-            
-            # Extract patient ID if available
-            patient_mrn = None
-            if patient_context and patient_context.demographics:
-                 # Assuming 'mrn' or 'patientId' might be in demographics
-                 patient_mrn = patient_context.demographics.get('patientId') or patient_context.demographics.get('mrn')
+        # Currently converting ALL suggestions to tasks. 
+        # Can add filtering later: if suggestion.action_type == 'TASK':
+        
+        # --- CHANGED: Use criterion text for task content --- 
+        # Use the suggestion's criterion text for more specific task content
+        # Prefix it for clarity on the Kanban board
+        task_content = f"Clarify: {suggestion.criterion}" if suggestion.criterion else suggestion.suggestion
+        # --- END CHANGE --- 
+        
+        # Generate a reasonably unique ID
+        task_id = f"task_{patient_id or 'anon'}_{trial_id or 'notrial'}_{int(time.time())}_{i}" # Include trial_id in task_id for uniqueness
 
-            tasks.append({
-                "id": task_id,
-                "columnId": "followUpNeeded", # Default starting column
-                "content": task_content,
-                "patientId": patient_mrn, 
-                "suggestion_type": suggestion.action_type,
-                "related_criterion": suggestion.criterion # Keep related criterion for context
-            })
-        else:
-            print(f"Skipping suggestion with action_type '{suggestion.action_type}': {suggestion.suggestion[:50]}...")
+        tasks.append({
+            "id": task_id,
+            "columnId": "followUpNeeded", # Default starting column
+            "content": task_content, # Use the updated content
+            "patientId": patient_id, # Use the passed patient_id
+            "suggestion_type": suggestion.action_type,
+            "related_criterion": suggestion.criterion, # Keep related criterion for context
+            "trial_id": trial_id,          # Added: Store trial ID
+            "trial_title": trial_title     # Added: Store trial title
+        })
             
-    print(f"Generated {len(tasks)} Kanban tasks from {len(suggestions)} suggestions.")
+    logging.info(f"Generated {len(tasks)} Kanban tasks from {len(suggestions)} suggestions for patient {patient_id}, trial {trial_id}.")
     return tasks
 
-# --- NEW: Endpoint for Planning Follow-ups ---
+# --- NEW: Endpoint for Planning Follow-ups --- 
 @app.post("/api/plan-followups")
 async def api_plan_followups(request: PlanFollowupsRequest):
+    """ 
+    Receives action suggestions and plans Kanban tasks using plan_followups_logic.
     """
-    Receives action suggestions and patient context, uses Planning Agent logic
-    to generate Kanban tasks, and returns them.
-    """
-    print(f"Received request to plan follow-ups for {len(request.action_suggestions)} suggestions.")
+    logging.info(f"Received request to plan follow-ups for patient ID: {request.patient_id}, Trial ID: {request.trial_id}") # Log trial ID
+    logging.info(f"Action Suggestions Received: {len(request.action_suggestions)}")
+    # Log details of a few suggestions for debugging
+    for i, suggestion in enumerate(request.action_suggestions[:3]): 
+        logging.debug(f" Suggestion {i+1}: {suggestion.dict()}") 
+
+    # --- Call the actual planning logic --- 
     try:
-        # In the future, might pass this to a dedicated PlanningAgent class/instance
-        planned_tasks = await plan_followups_logic(request.action_suggestions, request.patient_context)
+        planned_tasks = await plan_followups_logic(
+            suggestions=request.action_suggestions, 
+            patient_id=request.patient_id,
+            trial_id=request.trial_id,          # Pass trial_id
+            trial_title=request.trial_title     # Pass trial_title
+        )
+    except Exception as e:
+        logging.error(f"Error calling plan_followups_logic: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate planned tasks: {e}")
+    # ---------------------------------------
+
+    logging.info(f"Returning {len(planned_tasks)} planned tasks for patient {request.patient_id}, trial {request.trial_id}.") # Log trial ID
+    return {"success": True, "planned_tasks": planned_tasks}
+
+# --- Endpoint to get details and analysis for a SINGLE trial --- 
+@app.get("/api/trial-details/{trial_id}")
+async def get_trial_details(trial_id: str, patient_id: str):
+    """
+    Fetches details for a specific trial and runs eligibility analysis against a patient.
+    Currently uses placeholder trial data structure.
+    """
+    logging.info(f"Received request for trial details. Trial ID: {trial_id}, Patient ID: {patient_id}")
+    
+    # 1. Get Patient Data
+    patient_data = mock_patient_data_dict.get(patient_id)
+    if not patient_data:
+        logging.error(f"Patient data not found for ID: {patient_id}")
+        raise HTTPException(status_code=404, detail=f"Patient data not found for ID: {patient_id}")
+        
+    # 2. Placeholder for fetching real trial data by trial_id
+    # In a real implementation, you would fetch trial details from a database or API using trial_id
+    # For now, create a basic structure using the ID.
+    placeholder_trial_data = {
+        "nct_id": trial_id,
+        "title": f"Placeholder Title for {trial_id}",
+        "status": "Unknown",
+        "phase": "Unknown",
+        "summary": {"description": "Placeholder summary - full trial data not fetched."}, 
+        "eligibility": {
+            "criteria": "Placeholder criteria text - full trial data not fetched.",
+            "gender": "All",
+            "minimum_age": "18 Years",
+            "maximum_age": "N/A"
+        },
+        "locations": [],
+        "contacts": [],
+        "source_url": f"https://clinicaltrials.gov/study/{trial_id}" # Example URL
+    }
+    
+    # 3. Instantiate Agent
+    agent = ClinicalTrialAgent()
+
+    # 4. Run Agent Analysis for this specific trial
+    try:
+        # We need a method in the agent to analyze a *single*, pre-fetched trial object
+        # Let's assume a method like `run_single_trial_analysis` exists or needs to be added
+        # It would take the trial data and patient data
+        interpreted_result = await agent.run_single_trial_analysis( 
+             trial_data=placeholder_trial_data, 
+             patient_data=patient_data
+        )
+        
+        logging.info(f"Agent analysis complete for {trial_id}. Status: {interpreted_result.get('eligibility_assessment')}")
+        
+        # 5. Combine original (placeholder) data with interpreted results
+        # The frontend expects the interpreted result under the 'interpreted_result' key
+        combined_data = {
+            **placeholder_trial_data, # Spread the original placeholder data
+            "interpreted_result": interpreted_result 
+        }
         
         return {
             "success": True,
-            "message": f"Successfully planned {len(planned_tasks)} follow-up tasks.",
-            "tasks": planned_tasks
+            "data": combined_data
         }
+
+    except AttributeError as e:
+         # Handle case where the agent method doesn't exist yet
+         if "run_single_trial_analysis" in str(e):
+             logging.error("ClinicalTrialAgent needs a 'run_single_trial_analysis' method.", exc_info=True)
+             raise HTTPException(status_code=501, detail="Agent analysis method for single trial not implemented.")
+         else:
+             logging.error(f"Attribute error during agent analysis for {trial_id}: {e}", exc_info=True)
+             raise HTTPException(status_code=500, detail=f"Internal error during analysis: {e}")
     except Exception as e:
-        print(f"Error during follow-up planning: {e}", file=sys.stderr)
-        # Log the full traceback for debugging
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Failed to plan follow-up tasks: {str(e)}"
-        )
-# --- End New Endpoint ---
+        logging.error(f"Error running analysis for trial {trial_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to analyze trial {trial_id}: {str(e)}")
 
 # Add logic to run the app if this script is executed directly
 # (e.g., for development/testing)

@@ -289,52 +289,48 @@ Develop a dedicated portal within the application to empower cancer researchers 
         *   Fetch full details for top N trials from SQLite.
     *   [X] **3.2 Test End-to-End:** Tested search via frontend, fixed display issues.
 
-*   **Phase 4: Detailed AI Eligibility Assessment (Current Focus)**
+*   **Phase 4: Detailed AI Eligibility Assessment (Current Focus)** - Mostly Complete
     *   [X] **4.1 Define Structured Patient Profile Schema:** (Conceptual definition: Diagnosis, Stage, ECOG, Labs, Biomarkers, Comorbidities, Prior Tx).
-    *   [ ] **4.2 Implement Patient Data Acquisition:** (Current: Assume passed in `context` for now; Future: Frontend form/EMR).
+    *   [X] **4.2 Implement Patient Data Acquisition:** (Current: Assume passed in `context`).
     *   [X] **4.3 Integrate LLM Client:** Initialize `google.generativeai` in `ClinicalTrialAgent`.
-    *   [ ] **4.4 Design Eligibility Assessment Prompt:** Define prompt template instructing LLM to compare patient profile vs. criteria. **<- STARTING HERE**
-    *   [ ] **4.5 Modify `ClinicalTrialAgent.run`:**
-        *   Retrieve patient profile from `context`.
-        *   For each top trial from SQLite:
-            *   Get full inclusion/exclusion text.
-            *   Format prompt (Step 4.4).
-            *   Call LLM API (`self.llm_client.generate_content`).
-            *   Parse LLM response (JSON preferred: summary, met/unmet/unclear criteria).
-            *   Add parsed assessment to trial results dictionary.
-            *   Handle LLM errors/missing data gracefully.
-    *   [ ] **4.6 Update API Endpoint:** Ensure `/api/search-trials` handles patient context input & returns enriched trial data.
-    *   [ ] **4.7 Enhance Frontend (`ResultsDisplay.jsx`):** Display detailed LLM assessment, replacing placeholder.
+    *   [X] **4.4 Design Eligibility Assessment Prompt:** 
+        *   Initial prompts requested JSON, but proved unreliable due to LLM errors (invalid escapes).
+        *   **Final approach:** Prompt instructs LLM to generate **structured plain text** using headers (`== SUMMARY ==`, etc.) and bullet points.
+    *   [X] **4.5 Modify `ClinicalTrialAgent.run`:**
+        *   [X] Retrieve patient profile from `context`.
+        *   [X] For each top trial from SQLite:
+            *   [X] Get full inclusion/exclusion text.
+            *   [X] Format structured text prompt.
+            *   [X] Call LLM API (`self.llm_client.generate_content`) expecting plain text.
+            *   [X] **Parse LLM response:** Implement manual text parser (`_parse_structured_text_response`) using string splitting and regex to handle the structured text format robustly. Build nested dictionary result.
+            *   [X] Add parsed assessment to trial results dictionary.
+            *   [X] Handle LLM/parsing errors gracefully.
+            *   [X] Call Action Suggester using parsed data.
+    *   [X] **4.6 Update API Endpoint:** `/api/find-trials` handles patient context input & returns enriched trial data.
+    *   [X] **4.7 Enhance Frontend (`ResultsDisplay.jsx`):** Display detailed LLM assessment (from text parser output), ensuring correct handling of nested structure.
 
 *   **Phase 5: Actionability & Refinement (Next Steps)**
-    *   [ ] **5.1 Combine Eligibility/Summary LLM Call:**
-        *   Define new prompt asking for structured eligibility (met/unmet/unclear) AND a patient-specific narrative summary in one JSON output.
-        *   Modify `ClinicalTrialAgent.run` to use single LLM call per trial.
-        *   Remove runtime summary generation logic (pre-computation no longer needed for this approach).
-        *   Update frontend `ResultsDisplay` to show the new narrative summary.
-        *   **(Efficiency Gain: Reduces LLM calls per search)**
-    *   [ ] **5.2 Parallelize Eligibility Calls:**
-        *   Modify `ClinicalTrialAgent.run` loop to use `asyncio.gather` to run the combined LLM calls for all top N trials concurrently.
-        *   **(Efficiency Gain: Reduces wall-clock time for LLM processing)**
-    *   [X] **5.3 Enhance Frontend for Actionability (MVP Checklist):**
-        *   [X] 5.3.1 ...
-        *   [X] 5.3.6 ... (Marked complete, but UI was modified for planning flow)
-    *   [ ] **5.4 Agentic Workflow - Drafting Actions (Revised Flow):**
+    *   [X] **5.1 Combine Eligibility/Summary LLM Call:** (Achieved via structured text prompt).
+    *   [X] **5.2 Parallelize Eligibility Calls:** (`asyncio.gather` implemented in `ClinicalTrialAgent.run`).
+    *   [X] **5.3 Enhance Frontend for Actionability:** (UI elements adjusted for planning flow).
+    *   [ ] **5.4 Agentic Workflow - Drafting Actions (Current Focus - Follow-up Planning):**
         *   [ ] **5.4.1 Define Planning Agent/Logic:** Create backend function/agent (`PlanningAgent`?) that receives `action_suggestions` + `patientContext`.
             *   Purpose: Analyze suggestions holistically, potentially prioritize/consolidate, assign initial Kanban column (`followUpNeeded`), and format into Kanban task objects.
             *   (Future): Could add hints for the next agent/role needed for each task.
             *   (MVP): Start with rule-based logic; consider LLM for advanced planning later.
-        *   [X] **5.4.2 Create Backend Endpoint:** Implement a new endpoint (e.g., `/api/plan-followups`) that takes trial `source_url`, `action_suggestions`, `patientContext` and calls the Planning Agent/Logic, returning a list of Kanban task objects. **(MVP Implemented)**
+        *   [ ] **5.4.2 Create Backend Endpoint (NEXT STEP):** Implement a new endpoint (`/api/plan-followups`) in `backend/main.py` that takes `action_suggestions`, `patient_id`.
+            *   Define Pydantic request model (`PlanFollowupsRequest`).
+            *   Create FastAPI route handler (`@app.post("/api/plan-followups")`).
+            *   Implement basic handler logic: receive request, log suggestions, return dummy success response (`{"success": True, "planned_tasks": []}`).
+            *   **(This will resolve the frontend 422 error)**
         *   [X] **5.4.3 Modify Frontend Trigger:**
-            *   Change the "Actions" button in `ResultsDisplay.jsx` to "Plan Follow-ups".
-            *   Update its `onClick` handler to call the new `/api/plan-followups` endpoint, sending the relevant `action_suggestions` and `patientContext`.
-            *   Remove the old modal popup logic triggered by this button. **(Done)**
-        *   [X] **5.4.4 Add Tasks to Kanban:** In the frontend callback for the API call, use the existing `addTask` (or a new `addMultipleTasks`) function in `Research.jsx` to add the returned tasks to the Kanban board state. **(Done)**
-        *   [ ] **5.4.5 Enhance Kanban Task Display:** (Optional) Show more context on the Kanban card (e.g., related trial ID).
-        *   [ ] **5.4.6 Agentic Task Execution (Future):**
-            *   Implement logic triggered by Kanban actions (e.g., dragging a task to "Ready for Draft") that calls specific drafting agents (`PatientMessageDraftAgent`, `LabOrderDraftAgent`, etc.).
-            *   Requires UI for reviewing/approving agent drafts.
-        *   [ ] **5.4.7 EMR Integration via API (Future - High Complexity):** ... (Keep existing details)
+            *   [X] Change the "Actions" button to "Plan Follow-ups".
+            *   [X] Update its `onClick` handler to call `handlePlanFollowups`.
+            *   [X] Remove the old modal popup logic.
+        *   [X] **5.4.4 Add Tasks to Kanban:** Frontend `handlePlanFollowups` calls `/api/plan-followups` and includes logic to add returned tasks to Kanban state using `setTasks`. **(Currently blocked by missing endpoint)**
+        *   [ ] **5.4.5 Enhance Kanban Task Display:** (Optional) Show more context.
+        *   [ ] **5.4.6 Agentic Task Execution (Future):** ... (Keep existing details)
+        *   [ ] **5.4.7 EMR Integration via API (Future):** ... (Keep existing details)
         *   [ ] **5.4.8 Clinician Review Workflow:** ... (Keep existing details)
 
 *   **Phase 6+: Enhancements (Post-MVP)**

@@ -15,16 +15,20 @@
     *   **Tackling Trial Complexity:** Addressed the core challenge of matching patients to trials, a process often hindered by the sheer volume and complexity of eligibility criteria, which are typically lengthy, unstructured, and difficult for clinicians to rapidly parse and compare against individual patient data.
     *   **Streamlined Matching via Multi-Stage AI:** Implemented an intelligent, multi-stage matching pipeline:
         *   **Initial Filtering (Semantic Search & Vector Embeddings):** Leveraged powerful vector embeddings to represent the semantic meaning of both patient profiles (diagnosis, history) and high-level trial information (summaries, conditions). This allows for efficient semantic searching across potentially thousands of trials, drastically narrowing the field to a smaller, contextually relevant candidate pool, moving beyond simple keyword limitations.
-        *   **Fine-Grained Criteria Analysis (k-NN on Embeddings):** For the candidate trials, employed a more detailed analysis by comparing vector embeddings of specific, granular eligibility criteria against the patient's detailed data points. Using k-Nearest Neighbors (k-NN) or similar vector algorithms allows the system to rank trials based on how closely their nuanced requirements align with the patient's specific clinical features, providing a much more accurate match than manual review allows in a timely manner.
+        *   **Fine-Grained Criteria Analysis (LLM Assessment & Robust Parsing):** For the candidate trials, employed an LLM (`gemini-1.5-flash`) to perform detailed analysis comparing specific eligibility criteria against the patient's data points.
+            *   **Parsing Challenge:** Initial attempts involved instructing the LLM to return results in a complex, nested JSON format. However, this proved unreliable, frequently leading to parsing errors (`json.loads` failures) due to the LLM generating syntactically invalid JSON (e.g., incorrect escape sequences `\` or `\"` within strings), especially given the length and complexity of clinical trial criteria.
+            *   **Solution - Structured Text & Manual Parsing:** To overcome JSON unreliability, the approach was shifted. The LLM is now prompted to return the analysis as **structured plain text**, using specific headers (e.g., `== SUMMARY ==`, `== MET CRITERIA ==`) and bullet points. A dedicated Python function (`_parse_structured_text_response`) was implemented using string manipulation and regular expressions to manually parse this structured text, extracting the summary, eligibility status, and detailed criteria lists (Met, Unmet, Unclear, including reasoning). This manual text parsing proved significantly more robust for this task than relying on strict JSON parsing.
+            *   The structured dictionary created by the manual parser provides the necessary data (including the extracted `unclear_criteria` list) for subsequent steps.
     *   Integrated the `action_suggester` into the `ClinicalTrialAgent`.
-    *   After the LLM returns the eligibility assessment, the agent now calls the suggester to generate potential follow-up actions for any `unclear_criteria`.
-    *   These `action_suggestions` (including category, draft text, and brief suggestion) are added to the trial data returned by the `/api/search-trials` endpoint.
+    *   After the LLM response is successfully parsed (using the manual text parser), the agent now calls the `get_action_suggestions_for_trial` function, passing the parsed `eligibility_assessment` details (specifically the `unclear_criteria` list) to generate potential follow-up actions.
+    *   These `action_suggestions` (including category, draft text, and brief suggestion) are added to the trial data returned by the `/api/find-trials` endpoint (previously `/api/search-trials`).
 
 3.  **Frontend - Action Display & Interaction (`src/components/research/ResultsDisplay.jsx`):**
-    *   Modified the existing `ChecklistModal` (triggered by a button next to "Unclear Criteria", now labeled "Actions") to display the `action_suggestions` received from the backend.
-    *   For each suggestion, the modal shows the original criterion, the missing info, the brief suggested action, and context-aware buttons:
-        *   "Copy Draft": Appears for patient message suggestions, copies the drafted message text to the clipboard.
-        *   "Create Task": Appears for tasks/chart reviews/lab suggestions, currently logs the drafted task text to the console (placeholder for internal task list or future EMR integration).
+    *   The button triggering follow-up actions (next to "Unclear Criteria") is now labeled "Plan Follow-ups".
+    *   Clicking this button triggers the `handlePlanFollowups` function in `Research.jsx` (passing the `action_suggestions`).
+    *   `handlePlanFollowups` makes a POST request to the (currently stubbed) `/api/plan-followups` backend endpoint.
+    *   (Previous `ChecklistModal` implementation removed in favor of direct planning flow).
+    *   The frontend `InterpretedTrialResult` component was updated to correctly display the detailed criteria breakdown based on the nested dictionary structure produced by the backend's manual text parser.
 
 **Value Delivered:**
 

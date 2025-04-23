@@ -22,7 +22,8 @@ function KanbanBoard({
   onUpdateColumn,
   onCreateTask,
   onDeleteTask,
-  onUpdateTask 
+  onUpdateTask,
+  onViewTaskDetails
 }) {
 
   const columnsId = useMemo(() => columns.map((col) => col.id), [columns]);
@@ -44,18 +45,23 @@ function KanbanBoard({
         <div className="m-auto flex gap-4 overflow-x-auto p-2">
           <div className="flex gap-4">
             <SortableContext items={columnsId}>
-              {columns.map((col) => (
-                <ColumnContainer
-                  key={col.id}
-                  column={col}
-                  deleteColumn={onDeleteColumn}
-                  updateColumn={onUpdateColumn}
-                  createTask={onCreateTask}
-                  deleteTask={onDeleteTask}
-                  updateTask={onUpdateTask}
-                  tasks={tasks.filter((task) => task.columnId === col.id)}
-                />
-              ))}
+              {columns.map((col) => {
+                const filteredTasks = tasks.filter((task) => task.columnId === col.id);
+                console.log(`KanbanBoard: Rendering Column '${col.title}' (ID: ${col.id}). Passing ${filteredTasks.length} tasks.`, filteredTasks);
+                return (
+                  <ColumnContainer
+                    key={col.id}
+                    column={col}
+                    deleteColumn={onDeleteColumn}
+                    updateColumn={onUpdateColumn}
+                    createTask={onCreateTask}
+                    deleteTask={onDeleteTask}
+                    updateTask={onUpdateTask}
+                    tasks={filteredTasks}
+                    onViewTaskDetails={onViewTaskDetails}
+                  />
+                );
+              })}
             </SortableContext>
           </div>
           <button
