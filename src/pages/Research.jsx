@@ -2,11 +2,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { arrayMove } from "@dnd-kit/sortable";
 
-// Components
+// Assuming components are in src/components/research/
 import SearchBar from '../components/research/SearchBar';
 import ResultsDisplay from '../components/research/ResultsDisplay';
 import KanbanBoard from '../components/KanbanBoard';
-import PatientTrialMatchView from '../components/research/PatientTrialMatchView'; // Import the detail view
+import PatientTrialMatchView from '../components/research/PatientTrialMatchView';
 
 // Placeholder data structure anticipating agent outputs
 const placeholderTrial = {
@@ -52,10 +52,7 @@ const Research = () => {
   const [isLoading, setIsLoading] = useState(false); // Combined loading state
   const [error, setError] = useState(null);
   const [patientData, setPatientData] = useState(null); // State for full patient data
-  
-  // --- State for the Detail View --- 
-  const [detailViewContext, setDetailViewContext] = useState(null); // Stores { patientData, trialItem }
-  // --- End State --- 
+  const [detailViewContext, setDetailViewContext] = useState(null); // State for detail view context
   
   // --- Column State Initialization --- 
   const [columns, setColumns] = useState(() => {
@@ -339,7 +336,7 @@ const Research = () => {
   };
   // --- END NEW HANDLER ---
 
-  // Function to handle search triggered by SearchBar
+  // Search Handler 
   const handleSearch = async (query) => {
     if (!query) {
       setError('Please enter a search query.');
@@ -352,44 +349,39 @@ const Research = () => {
     setSearchResults([]); // Clear previous results
 
     // Prepare request body using the fetched patientData state
-    const requestBody = {
-        query: query,
-        patient_context: patientData // Use the full patientData object (or null if not loaded)
-    };
-
+    const requestBody = { query: query, patient_context: patientData };
     try {
-        const response = await fetch('http://localhost:8000/api/search-trials', { 
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(requestBody)
-        });
+      // --- Corrected API endpoint name --- 
+      const response = await fetch('http://localhost:8000/api/search-trials', { // Use the correct endpoint defined in main.py
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody)
+      });
 
-        if (!response.ok) {
-             const errorData = await response.json().catch(() => ({ detail: 'Failed to parse error response.' }));
-             console.error("Backend search error:", response.status, errorData);
-             throw new Error(errorData.detail || `HTTP error! Status: ${response.status}`);
-        }
+      if (!response.ok) {
+           const errorData = await response.json().catch(() => ({ detail: 'Failed to parse error response.' }));
+           console.error("Backend search error:", response.status, errorData);
+           throw new Error(errorData.detail || `HTTP error! Status: ${response.status}`);
+      }
 
-        const result = await response.json();
+      const result = await response.json();
 
-        if (result.success && result.data && result.data.found_trials) {
-            console.log("Trials found:", result.data.found_trials);
-            setSearchResults(result.data.found_trials);
-            if (result.data.found_trials.length === 0) {
-                 // Changed: Display message via ResultsDisplay instead of setting error here
-                 // setError('No matching trials found.');
-            }
-        } else if (result.success) {
-            console.log("Search successful but no trials found or data format unexpected.");
-            setSearchResults([]);
-            // Changed: Display message via ResultsDisplay instead of setting error here
-            // setError(result.message || 'No matching trials found.');
-        } else {
-             console.error("Backend indicated failure:", result);
-             throw new Error(result.message || 'Backend search failed.');
-        }
+      if (result.success && result.data && result.data.found_trials) {
+          console.log("Trials found:", result.data.found_trials);
+          setSearchResults(result.data.found_trials);
+          if (result.data.found_trials.length === 0) {
+               // Changed: Display message via ResultsDisplay instead of setting error here
+               // setError('No matching trials found.');
+          }
+      } else if (result.success) {
+          console.log("Search successful but no trials found or data format unexpected.");
+          setSearchResults([]);
+          // Changed: Display message via ResultsDisplay instead of setting error here
+          // setError(result.message || 'No matching trials found.');
+      } else {
+           console.error("Backend indicated failure:", result);
+           throw new Error(result.message || 'Backend search failed.');
+      }
     } catch (err) {
         console.error("Error fetching search results:", err);
         setError(err.message || 'Failed to fetch search results. Check backend connection.');
@@ -397,12 +389,9 @@ const Research = () => {
     } finally {
         setIsLoading(false); // Ensure loading state is turned off
     }
-    
-    // Clear detail view on new search
-    setDetailViewContext(null);
   };
 
-  // Function to handle search triggered by button
+  // Context Search Handler 
   const handlePatientContextSearch = () => {
     if (!patientData) {
       setError("Cannot search by context: Patient data not loaded.");
@@ -424,7 +413,7 @@ const Research = () => {
   };
 
   // --- Handler to show Detail View when Kanban card is clicked ---
-  const handleViewTaskDetails = async (task) => {
+  const handleViewTaskDetails = async (task) => { // Make async
     console.log("handleViewTaskDetails called for task:", task);
     if (!task.trial_id || !patientData) {
       console.error("Cannot view details: Missing trial ID on task or patient data not loaded.");
@@ -478,8 +467,6 @@ const Research = () => {
   return (
     <div className="research-container p-4 md:p-6 bg-gray-50">
       <h1 className="text-2xl font-bold mb-4 text-gray-800">Research Portal</h1>
-      
-      {/* Patient Context Banner */}      
       {patientId && patientData && // Show patient ID only if data loaded successfully
         <p className="mb-4 text-sm text-gray-600">Showing research relevant to Patient ID: {patientId} ({patientData.demographics?.name || 'Name N/A'})</p>
       }
@@ -514,7 +501,6 @@ const Research = () => {
                 Find Trials for This Patient
               </button>
             </div>
-
             {/* Display Loading / Error (related to search) / Results */}            
             {isLoading && searchResults.length === 0 && !error && <div className="text-center p-6 text-gray-500">Searching for trials...</div>}
             {/* Display search error separately from loading */}            
@@ -524,25 +510,25 @@ const Research = () => {
                 results={searchResults} 
                 patientContext={patientData} 
                 onPlanFollowups={handlePlanFollowups} 
+                kanbanTasks={tasks}
                />
             )}
             {!isLoading && !error && searchQuery && searchResults.length === 0 && (
                 <div className="text-center p-6 text-gray-500">No matching trials found for "{searchQuery}".</div>
             )}
-            
             {/* Kanban Board */}            
             {patientId && (
                 <div className="mt-8 mb-6 border-t pt-6">
                  <h3 className="text-lg font-semibold mb-3 text-gray-700">Follow-up Task Board</h3>
                  <KanbanBoard 
                     columns={columns}
-                    tasks={tasks} 
-                    onColumnsChange={setColumns} 
-                    onTasksChange={handleTaskMove} 
+                    tasks={tasks} // Pass the filtered tasks for the current context
+                    onColumnsChange={setColumns} // Pass state setter directly for column order
+                    onTasksChange={handleTaskMove} // Pass specific handler for task moves
                     onCreateColumn={handleCreateColumn}
                     onDeleteColumn={handleDeleteColumn}
                     onUpdateColumn={handleUpdateColumn}
-                    onCreateTask={handleCreateTask}
+                    onCreateTask={handleCreateTask} // For adding new tasks directly to board
                     onDeleteTask={handleDeleteTask}
                     onUpdateTask={handleUpdateTask}
                     onViewTaskDetails={handleViewTaskDetails} 
@@ -551,7 +537,6 @@ const Research = () => {
             )}
           </>
       )}
-      
     </div>
   );
 };

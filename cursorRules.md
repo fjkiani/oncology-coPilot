@@ -61,24 +61,27 @@ Title: This is the title of the search result
 Snippet: This is a snippet of the search result
 If needed, you can further use the web_scraper.py file to scrape the web page content.
 
-Lessons
-User Specified Lessons
-You have a python venv in ./venv. Use it.
-Include info useful for debugging in the program output.
-Read the file before you try to edit it.
-Due to Cursor's limit, when you use git and gh and need to submit a multiline commit message, first write the message in a file, and then use git commit -F <filename> or similar command to commit. And then remove the file. Include "[Cursor] " in the commit message and PR title.
 Cursor learned
-For search results, ensure proper handling of different character encodings (UTF-8) for international queries
-Add debug information to stderr while keeping the main output clean in stdout for better pipeline integration
-When using seaborn styles in matplotlib, use 'seaborn-v0_8' instead of 'seaborn' as the style name due to recent seaborn version changes
-Use 'gpt-4o' as the model name for OpenAI's GPT-4 with vision capabilities
-When using f-strings with JSON templates, double the curly braces {{ and }} to escape them properly and avoid format specifier errors
-When working with experimental models like gemini-2.0-flash-thinking-exp-01-21, always implement fallback mechanisms to standard models in case the experimental model is unavailable
-For options data, use RapidAPI directly instead of the YahooFinanceConnector class to avoid compatibility issues with the OptionChainQuote initialization
-When processing options data from RapidAPI, create a mapping of strikes to straddles for easier lookup and processing of call and put data
-When implementing the display_analysis function in Streamlit, ensure it combines all necessary display components (market overview, ticker analysis, technical insights, learning points) to avoid NameError exceptions
-Python 3.9 requires `typing.Union` and `typing.Tuple` for type hints instead of the `|` operator and `tuple[]` syntax (e.g., use `Tuple[bool, Union[str, None]]`).
-When sending transactions with `web3.py`, the signed transaction object (`signed_tx`) returned by `w3.eth.account.sign_transaction` exposes the raw bytes via the `raw_transaction` attribute (e.g., `w3.eth.send_raw_transaction(signed_tx.raw_transaction)`).
+*   For search results, ensure proper handling of different character encodings (UTF-8) for international queries
+*   Add debug information to stderr while keeping the main output clean in stdout for better pipeline integration
+*   When using seaborn styles in matplotlib, use 'seaborn-v0_8' instead of 'seaborn' as the style name due to recent seaborn version changes
+*   Use 'gpt-4o' as the model name for OpenAI's GPT-4 with vision capabilities
+*   When using f-strings with JSON templates, double the curly braces {{ and }} to escape them properly and avoid format specifier errors
+*   When working with experimental models like gemini-2.0-flash-thinking-exp-01-21, always implement fallback mechanisms to standard models in case the experimental model is unavailable
+*   For options data, use RapidAPI directly instead of the YahooFinanceConnector class to avoid compatibility issues with the OptionChainQuote initialization
+*   When processing options data from RapidAPI, create a mapping of strikes to straddles for easier lookup and processing of call and put data
+*   When implementing the display_analysis function in Streamlit, ensure it combines all necessary display components (market overview, ticker analysis, technical insights, learning points) to avoid NameError exceptions
+*   Python 3.9 requires `typing.Union` and `typing.Tuple` for type hints instead of the `|` operator and `tuple[]` syntax (e.g., use `Tuple[bool, Union[str, None]]`).
+*   When sending transactions with `web3.py`, the signed transaction object (`signed_tx`) returned by `w3.eth.account.sign_transaction` exposes the raw bytes via the `raw_transaction` attribute (e.g., `w3.eth.send_raw_transaction(signed_tx.raw_transaction)`).
+*   **Agent Analysis Depth:** When designing multi-stage analysis agents (e.g., initial screen -> deep dive), ensure the later stages explicitly incorporate the reasoning/context from earlier stages into their prompts to perform validation/refinement, not just redundant analysis.
+*   **Abstract Properties Implementation:** When inheriting from an Abstract Base Class (ABC) in Python that defines abstract properties, the subclass must implement these using the `@property` decorator. Simply setting instance attributes with the same name in `__init__` is insufficient and can lead to `TypeError` (can\'t instantiate abstract class) or `AttributeError` (can\'t set attribute if properties lack setters).
+*   **Frontend API Calls (Dev):** When fetching from a frontend dev server (e.g., localhost:5173) to a backend API running on a different port (e.g., localhost:8000), use the absolute URL (`http://localhost:8000/api/...`) in the `fetch` call, not a relative path (`/api/...`), to avoid 404 errors.
+*   **Strategic Action Generation:** For agents intended to suggest next steps based on analysis gaps, consider using a dedicated prompt/LLM call focused on generating actionable, strategic recommendations (e.g., specific tasks, queries) rather than just summarizing the identified gaps.
+*   **EMR Integration Complexity (Genomics):** Integrating specialized data like structured genomics from real EMRs is highly complex, involving potential challenges in API availability, data standardization, parsing diverse formats (FHIR, HL7, VCF, PDF reports), and requires significant upstream data engineering distinct from agent logic.
+*   **Realistic Mock Data:** When developing features dependent on complex data (like genomics), create mock data structures that accurately reflect the *type* and *format* of clinically relevant, processed information (e.g., summarized mutations, biomarkers), not just raw outputs, to enable realistic agent development.
+*   **NLP for Criterion Detection:** Identifying specific types of criteria (e.g., genomic) within free-text eligibility rules requires robust NLP techniques beyond simple keyword matching, potentially involving regex, named entity recognition, or classifiers for reliable detection.
+*   **Model Output Interpretation:** Integrating specialized AI models (like Evo 2) requires an interpretation layer to translate raw model outputs (scores, likelihoods) into clinically meaningful statuses (MET/NOT_MET/UNCLEAR) and evidence statements suitable for the application context.
+
 Scratchpad
 Current Task: Develop an AI Cancer Care CoPilot for Oncologists
 
@@ -308,35 +311,57 @@ Develop a dedicated portal within the application to empower cancer researchers 
             *   [X] Call Action Suggester using parsed data.
     *   [X] **4.6 Update API Endpoint:** `/api/find-trials` handles patient context input & returns enriched trial data.
     *   [X] **4.7 Enhance Frontend (`ResultsDisplay.jsx`):** Display detailed LLM assessment (from text parser output), ensuring correct handling of nested structure.
+    *   **[ ] (NEW TASK) 4.8 Codebase Understanding & Catch-up:** Review the current implementation and interaction between key components (Frontend: Research.jsx, ResultsDisplay.jsx, KanbanBoard.jsx, TaskCard.jsx, PatientTrialMatchView.jsx; Backend: main.py, ClinicalTrialAgent, ActionSuggester, plan_followups_logic) to ensure a comprehensive understanding of the existing Research Portal workflow (Search -> Display -> Plan Followups -> Kanban -> 360 View). Await user-provided code/context for deeper analysis.
 
-*   **Phase 5: Actionability & Refinement (Next Steps)**
-    *   [X] **5.1 Combine Eligibility/Summary LLM Call:** (Achieved via structured text prompt).
-    *   [X] **5.2 Parallelize Eligibility Calls:** (`asyncio.gather` implemented in `ClinicalTrialAgent.run`).
-    *   [X] **5.3 Enhance Frontend for Actionability:** (UI elements adjusted for planning flow).
-    *   [ ] **5.4 Agentic Workflow - Drafting Actions (Current Focus - Follow-up Planning):**
-        *   [ ] **5.4.1 Define Planning Agent/Logic:** Create backend function/agent (`PlanningAgent`?) that receives `action_suggestions` + `patientContext`.
-            *   Purpose: Analyze suggestions holistically, potentially prioritize/consolidate, assign initial Kanban column (`followUpNeeded`), and format into Kanban task objects.
-            *   (Future): Could add hints for the next agent/role needed for each task.
-            *   (MVP): Start with rule-based logic; consider LLM for advanced planning later.
-        *   [ ] **5.4.2 Create Backend Endpoint (NEXT STEP):** Implement a new endpoint (`/api/plan-followups`) in `backend/main.py` that takes `action_suggestions`, `patient_id`.
-            *   Define Pydantic request model (`PlanFollowupsRequest`).
-            *   Create FastAPI route handler (`@app.post("/api/plan-followups")`).
-            *   Implement basic handler logic: receive request, log suggestions, return dummy success response (`{"success": True, "planned_tasks": []}`).
-            *   **(This will resolve the frontend 422 error)**
-        *   [X] **5.4.3 Modify Frontend Trigger:**
-            *   [X] Change the "Actions" button to "Plan Follow-ups".
-            *   [X] Update its `onClick` handler to call `handlePlanFollowups`.
-            *   [X] Remove the old modal popup logic.
-        *   [X] **5.4.4 Add Tasks to Kanban:** Frontend `handlePlanFollowups` calls `/api/plan-followups` and includes logic to add returned tasks to Kanban state using `setTasks`. **(Currently blocked by missing endpoint)**
-        *   [ ] **5.4.5 Enhance Kanban Task Display:** (Optional) Show more context.
-        *   [ ] **5.4.6 Agentic Task Execution (Future):** ... (Keep existing details)
-        *   [ ] **5.4.7 EMR Integration via API (Future):** ... (Keep existing details)
-        *   [ ] **5.4.8 Clinician Review Workflow:** ... (Keep existing details)
+*   **Phase 5: True Deep Analysis & Agentic Resolution (Current Focus)**
+    *   [ ] **5.1 Refactor Deep Dive Agent (`EligibilityDeepDiveAgent`) for True Depth & Internal Resolution:**
+        *   [X] **5.1.1 Incorporate Initial Reasoning:** Modify `_analyze_single_criterion_async` prompt to include `original_reasoning` from the first analysis pass and instruct the LLM to validate/refute/clarify based on it and the provided patient data snippet. **(DONE - Ready for Test)**
+        *   [ ] **5.1.2 Implement Internal Data Search Logic:** Add logic within the agent's `run` method (after initial LLM analysis loop) to perform targeted searches within the provided `patient_data` (especially `notes`) for keywords related to common gaps (e.g., ECOG, specific labs) before generating external suggestions. **(NEXT STEP)**
+        *   [ ] **5.1.3 Enhance Strategic Next Steps Generation:** Modify the prompt for the 'next steps' LLM call to *only* operate on gaps remaining *after* internal search attempts. Include the outcome of internal searches in the prompt context. Ensure output format supports future action integration.
+        *   [ ] **5.1.4 Refine Agent Report Structure:** Update the structure returned by the agent's `run` method to clearly separate: validated/refuted criteria, internal search findings, remaining gaps, and strategic next steps.
+        *   [ ] **5.1.5 Integrate Foundational Genomic Model (e.g., Evo 2) for Genomic Criteria Analysis:**
+            *   **Implementation Plan (Phased & Realistic):**
+                *   [ ] **1. Define Mock Genomic Data Structure:** Add representative `genomics` section (mutations, biomarkers based on clinical reports) to `mock_patient_data_dict` in `main.py`.
+                *   [ ] **2. Create `GenomicAnalystAgent` (Placeholder):** 
+                    *   Create `backend/agents/genomic_analyst_agent.py`.
+                    *   Define class (`AgentInterface`), properties (`name`, `description`).
+                    *   Add `__init__` (placeholder for API client).
+                    *   Define `async run(self, genomic_query: Dict, patient_genomic_data: Dict) -> Dict:`.
+                    *   Implement `run` to log inputs and return a *hardcoded mock analysis* (e.g., `{'predicted_status': 'UNCLEAR', 'evidence': 'Mock genomic analysis placeholder.', 'confidence': 0.5}`).
+                *   [ ] **3. Implement Genomic Criterion Detection (`EligibilityDeepDiveAgent`):** In `_analyze_single_criterion_async`, implement keyword/regex logic to identify genomic criteria (set `is_genomic_criterion` flag).
+                *   [ ] **4. Implement Basic Delegation Logic (`EligibilityDeepDiveAgent`):** In `_analyze_single_criterion_async`, if `is_genomic_criterion`: check if `patient_data['genomics']` exists; if yes, instantiate `GenomicAnalystAgent`, call its `run` (with mock data), use mock result, and skip standard LLM call; if no, mark UNCLEAR due to missing patient genomic data.
+                *   [ ] **5. Initial Testing & Report Structure Refinement:** Test flow, verify delegation to mock agent works, ensure mock results integrate clearly into the deep dive report structure.
+                *   [ ] **6. Integrate Evo 2 API (NVIDIA NIM/BioNeMo):** In `GenomicAnalystAgent`, implement API client init and modify `run` to make actual API calls, format inputs, handle API errors.
+                *   [ ] **7. Implement Interpretation Layer (`GenomicAnalystAgent`):** In `GenomicAnalystAgent.run`, add logic *after* API call to translate raw Evo 2 output (scores, etc.) into the application's required structured format (status, evidence, confidence).
+                *   [ ] **8. (Task 5.2) Enhance Frontend Display:** Update UI to show Evo 2 derived insights distinctly.
+    *   [ ] **5.2 Enhance Frontend Display:** Modify `ResultsDisplay.jsx` to clearly present the richer information from the updated deep dive report (validation status, internal search findings, genomic analysis results, refined actions).
+    *   [ ] **5.3 Integrate Actions with Workflow (Future):**
+        *   [ ] Convert structured `strategic_next_steps` into actionable items (e.g., create tasks in Kanban board automatically or via user confirmation).
+        *   [ ] Explore triggering other agents based on specific `action_type` outputs.
 
 *   **Phase 6+: Enhancements (Post-MVP)**
     *   [ ] Refine eligibility chunking/embedding strategy.
     *   [ ] Implement other agents (`LiteratureReview`).
     *   [ ] Add User Roles, Saved Findings.
+    *   [ ] **Trial Matching Enhancements (Inspired by TrialGPT):**
+        *   [ ] **Integrate Live NCI API:** Prioritize using the NCI Clinical Trials Search API for real-time trial data retrieval (search and details) instead of solely relying on the local snapshot.
+        *   [ ] **Enhance Retrieval:** Implement LLM-based keyword generation from patient context and explore hybrid search (e.g., BM25 + Vector Search) for improved initial trial filtering.
+        *   [ ] **Refine Matching Granularity:** Evaluate making the initial eligibility assessment more systematically criterion-by-criterion (similar to TrialGPT-Matching) potentially parallelized.
+        *   [ ] **Implement Explicit Ranking:** Add a dedicated scoring mechanism (rule-based or LLM-based aggregation) to rank trials based on the final eligibility assessment (TrialGPT-Ranking concept).
+        *   [ ] **Benchmarking:** Plan for future evaluation using public datasets (e.g., SIGIR, TREC CT) to benchmark matching performance.
+    *   [ ] **Integrate Open Cancer Databases (e.g., TCIA, GDC, CPTAC):**
+        *   [ ] **`ImagingReferenceAgent`:** Allow users to query TCIA API for *reference* images (de-identified) based on disease, modality, features, etc., for comparison/education.
+        *   [ ] **`ResearchContextAgent`:** Link patient context (diagnosis, biomarkers) to relevant TCIA/GDC/CPTAC cohorts, summarizing available associated data (clinical, omics) for population context.
+        *   [ ] **`MultiOmicsComparisonAgent`:** Query GDC/CPTAC (or pre-processed data) based on patient's specific genomic/proteomic alterations to find prevalence, associations, pathways.
+        *   [ ] **Foundation for Multimodal:** Leverage TCIA datasets (images + linked data) for future training/validation of potential multimodal `ImagingAnalysisAgent` capabilities.
+        *   [ ] **`ImagingReferenceAgent`:** Allow users to query TCIA API for *reference* images (de-identified) based on disease, modality, features, etc., for comparison/education.
+        *   [ ] **`ResearchContextAgent`:** Link patient context (diagnosis, biomarkers) to relevant TCIA/GDC/CPTAC cohorts, summarizing available associated data (clinical, omics) for population context.
+        *   [ ] **`MultiOmicsComparisonAgent`:** Query GDC/CPTAC (or pre-processed data) based on patient's specific genomic/proteomic alterations to find prevalence, associations, pathways.
+        *   [ ] **Foundation for Multimodal:** Leverage TCIA datasets (images + linked data) for future training/validation of potential multimodal `ImagingAnalysisAgent` capabilities.
+        *   [ ] **`ImagingReferenceAgent`:** Allow users to query TCIA API for *reference* images (de-identified) based on disease, modality, features, etc., for comparison/education.
+        *   [ ] **`ResearchContextAgent`:** Link patient context (diagnosis, biomarkers) to relevant TCIA/GDC/CPTAC cohorts, summarizing available associated data (clinical, omics) for population context.
+        *   [ ] **`MultiOmicsComparisonAgent`:** Query GDC/CPTAC (or pre-processed data) based on patient's specific genomic/proteomic alterations to find prevalence, associations, pathways.
+        *   [ ] **Foundation for Multimodal:** Leverage TCIA datasets (images + linked data) for future training/validation of potential multimodal `ImagingAnalysisAgent` capabilities.
     *   [ ] ... (Knowledge Expansion, Collaboration).
 
 **Key Challenges & Considerations:** (Maintain restored list)
@@ -433,12 +458,50 @@ Development Strategy for Specialization:
 *   **Iterate:** Implement specialized agents and capabilities incrementally.
 *   **Integrate:** Focus on leveraging data and insights across agents via the orchestrator.
 *   **Specialized Models:** Continuously evaluate and integrate validated, domain-specific AI models (NLP, imaging, genomics, etc.).
+*   **Integrate Foundational Genomic Models (e.g., Evo 2):**
+    *   [ ] **Prerequisite:** Ensure patient genomic data (VCFs, mutations lists) can be securely accessed/ingested.
+    *   [ ] **`GenomicAnalystAgent` (Initial):** Implement agent using Evo 2 (via NVIDIA BioNeMo/NIM API) to analyze mutations, predict functional impact, and distinguish potential driver mutations.
+    *   [ ] **`TreatmentPredictionAgent` (Advanced):** Develop agent to infer potential treatment sensitivity/resistance by combining `GenomicAnalystAgent` output with drug target information. Explore feasibility of fine-tuning.
+    *   [ ] **`DrugDiscoveryAgent` (Research Focus):** Explore using Evo 2's generative capabilities for target ID or therapeutic sequence design within a research context.
 
 // ... (Technology Stack Considerations - Maybe update later as needed)
 // ... (Key Challenges - Maybe update later as needed)
 // ... (Lessons & Design Principles) ...
 
-*   When processing options data from RapidAPI, create a mapping of strikes to straddles for easier lookup and processing of call and put data
-*   When implementing the display_analysis function in Streamlit, ensure it combines all necessary display components (market overview, ticker analysis, technical insights, learning points) to avoid NameError exceptions
-*   Python 3.9 requires `typing.Union` and `typing.Tuple` for type hints instead of the `|` operator and `tuple[]` syntax (e.g., use `Tuple[bool, Union[str, None]]`).
-*   When sending transactions with `web3.py`, the signed transaction object (`signed_tx`) returned by `w3.eth.account.sign_transaction`
+# Next Steps for Evo 2 Integration
+
+1.  **Mock Genomic Data:**
+    *   Define a clear Python data structure (e.g., Pydantic model) representing patient genomic variants (gene, type, HGVS notation, coordinates if available).
+    *   Create realistic mock patient genomic data matching this structure to be included in the `patient_data` context object for testing.
+
+2.  **Evo 2 API & Reference Setup:**
+    *   Secure access credentials for the Evo 2 API (e.g., NVIDIA NIM/BioNeMo).
+    *   Establish a reliable method to access the human reference genome sequence (e.g., GRCh38), potentially using a local copy or a library like `pyfaidx`.
+
+3.  **Implement `GenomicAnalystAgent` Core:**
+    *   Create the agent file: `backend/agents/genomic_analyst_agent.py`.
+    *   Implement core VEP logic within the agent:
+        *   Function to fetch reference sequence context around a variant.
+        *   Function to construct reference and variant sequences for API input.
+        *   Function to call the Evo 2 API and retrieve likelihood scores.
+        *   Function to calculate the delta likelihood score.
+
+4.  **Interpretation & Validation:**
+    *   Research and define initial thresholds/rules for mapping delta likelihood scores to predicted functional impact (e.g., `PATHOGENIC_EFFECT`, `BENIGN/UNCLEAR_EFFECT`).
+    *   *Optional but Recommended:* Plan for validation against known databases (e.g., ClinVar) or expert review later.
+
+5.  **Agent Interface & Integration:**
+    *   Define the precise input and output structure for `GenomicAnalystAgent` (using Pydantic models).
+    *   Modify `EligibilityDeepDiveAgent` (or potentially `ClinicalTrialAgent` if the deep dive isn't separate yet):
+        *   Add logic to identify genomic criteria requiring VEP.
+        *   Add logic to extract necessary variant details from `patient_data`.
+        *   Implement the call to `GenomicAnalystAgent` with the required inputs.
+        *   Integrate the `GenomicAnalystAgent`'s structured output into the eligibility assessment results for the relevant criteria.
+
+6.  **Testing & Refinement:**
+    *   Develop test cases using the mock genomic data and sample trial criteria.
+    *   Test the end-to-end flow: Trial Search -> Eligibility Analysis -> Genomic Criterion Detection -> `GenomicAnalystAgent` Call -> VEP Result Integration.
+    *   Refine interpretation logic based on test results.
+
+7.  **UI/Explainability (Placeholder):**
+    *   Consider how the VEP results (prediction, score, evidence) will eventually be displayed to the user in the frontend. This doesn't need full implementation now but should be kept in mind.

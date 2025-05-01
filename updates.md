@@ -36,3 +36,31 @@
 *   **Reduced Cognitive Load:** The AI performs the initial step of identifying *what* needs to be done (check chart, ask patient, order lab) and drafts the corresponding action text.
 *   **Workflow Bridge (MVP):** Provides immediate assistance (copying drafts) and lays the foundation for more integrated agentic workflows (task creation, order drafting) by providing the trigger points and drafted content.
 *   **Improved Efficiency:** Saves clinicians time by automating the analysis of unclear criteria and the drafting of initial follow-up steps.
+
+## [Planned Feature] - Deep Genomic Analysis with Evo 2 Integration
+
+**Context:** While the current agents can identify clinical trial criteria mentioning specific genes or mutations, they lack the ability to interpret the *functional significance* of those mutations. Many advanced trials require specific types of mutations (e.g., loss-of-function, activating) which text analysis alone cannot determine.
+
+**Proposed Solution:**
+
+1.  **Integrate Evo 2:** Leverage the Evo 2 foundational DNA model from Arc Institute, specifically its capability for Variant Effect Prediction (VEP) using delta likelihood scoring. By comparing the model's likelihood score for a patient's variant sequence against the reference sequence, we can predict the potential functional impact (e.g., pathogenic vs. benign).
+2.  **Introduce `GenomicAnalystAgent`:** Create a new specialized agent (`backend/agents/genomic_analyst_agent.py`) responsible for:
+    *   Receiving patient-specific genomic variant details (gene, HGVS notation).
+    *   Orchestrating the VEP workflow: retrieving reference context, constructing variant sequence, calling the Evo 2 API (likely via NVIDIA NIM/BioNeMo), calculating the delta likelihood score, and interpreting the result.
+    *   Outputting a structured prediction (e.g., `PATHOGENIC_EFFECT`, `BENIGN/UNCLEAR_EFFECT`) with supporting evidence.
+3.  **Enhance `EligibilityDeepDiveAgent`:** Update the existing deep dive agent to:
+    *   Detect complex genomic criteria using pattern matching.
+    *   When such criteria are found and relevant patient genomic data is available, **delegate** the analysis to the `GenomicAnalystAgent`.
+    *   Incorporate the `GenomicAnalystAgent`'s structured prediction to determine the eligibility status (`deep_dive_status`) for that specific criterion, replacing or augmenting the standard LLM text analysis.
+
+**Expected Value:**
+
+*   **Biologically Relevant Matching:** Enables accurate assessment of eligibility based on the predicted functional impact of mutations, not just their presence.
+*   **Deeper Clinical Insight:** Provides clinicians with AI-driven predictions about the significance of patient variants within their workflow.
+*   **Foundation for Personalization:** Creates capabilities for future agents focused on treatment response prediction or target identification.
+
+**Prerequisites & Challenges:**
+
+*   **Requires structured patient genomic data** (initially mock data, future EMR/LIS integration needed).
+*   Requires access to a reference genome and the Evo 2 API.
+*   Interpretation logic (mapping scores to clinical status) needs careful definition and validation.

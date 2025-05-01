@@ -85,6 +85,7 @@ function KanbanBoard({
                 tasks={tasks.filter(
                   (task) => task.columnId === activeColumn.id,
                 )}
+                onViewTaskDetails={onViewTaskDetails}
               />
             )}
             {activeTask && (

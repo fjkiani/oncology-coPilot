@@ -38,7 +38,7 @@ EMBEDDING_MODEL = 'all-MiniLM-L6-v2'
 N_CHROMA_RESULTS = 10 # Number of results to fetch from ChromaDB
 # LLM Configuration
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-LLM_MODEL_NAME = "gemini-1.5-flash"
+LLM_MODEL_NAME = "gemini-1.5-pro"
 DEFAULT_LLM_GENERATION_CONFIG = GenerationConfig(
     temperature=0.2, 
     max_output_tokens=8192 # Keep token limit
@@ -487,7 +487,63 @@ class ClinicalTrialAgent(AgentInterface):
             return None
     # --- End Manual Structured Text Parser --- 
 
-    # --- Refined Run Method (Ensure it uses the result correctly) ---
+    # --- NEW: Method to run analysis on a SINGLE trial object --- 
+    async def run_single_trial_analysis(self, trial_data: Dict[str, Any], patient_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Runs the LLM eligibility assessment for a single, already fetched trial data dictionary.
+        This is used by the /api/trial-details/{trial_id} endpoint.
+
+        Args:
+            trial_data: A dictionary containing the details of the clinical trial.
+            patient_data: A dictionary containing the relevant patient context.
+
+        Returns:
+            A dictionary containing the LLM's assessment results (or error/skip indicators),
+            structured similarly to the output of _get_llm_assessment_for_trial.
+        """
+        nct_id = trial_data.get("nct_id", "UNKNOWN_ID")
+        logging.info(f"Running single trial analysis for {nct_id}")
+        
+        if not trial_data:
+            logging.warning("run_single_trial_analysis called with empty trial_data.")
+            return {
+                "llm_eligibility_analysis": None,
+                "overall_assessment": "Error (Missing Trial Data)",
+                "narrative_summary": "Trial data was not provided for analysis."
+            }
+        
+        if not patient_data:
+             logging.warning(f"run_single_trial_analysis called with empty patient_data for {nct_id}.")
+             # Decide if this is fatal or just continue without patient context
+             # For now, let's return an error as assessment is patient-specific
+             return {
+                "llm_eligibility_analysis": None,
+                "overall_assessment": "Error (Missing Patient Data)",
+                "narrative_summary": "Patient data was not provided for analysis."
+             }
+             
+        try:
+            # Call the existing LLM assessment helper method
+            assessment_result = await self._get_llm_assessment_for_trial(
+                patient_context=patient_data, 
+                trial_detail=trial_data
+            )
+            # The helper already formats the output correctly
+            return assessment_result if assessment_result else {
+                "llm_eligibility_analysis": None,
+                "overall_assessment": "Error (Assessment Failed)",
+                "narrative_summary": "The LLM assessment process failed unexpectedly."
+            }
+            
+        except Exception as e:
+            logging.error(f"Unexpected error in run_single_trial_analysis for {nct_id}: {e}", exc_info=True)
+            return {
+                "llm_eligibility_analysis": None,
+                "overall_assessment": "Error (Internal Agent Error)",
+                "narrative_summary": f"An unexpected error occurred within the agent: {e}"
+            }
+    # --- END NEW: Single Trial Analysis Method --- 
+
     async def run(self, context: Dict[str, Any] = None, **kwargs) -> Dict[str, Any]:
         """ Executes the agent's logic: search trials, assess eligibility using TEXT LLM output. """
         query = kwargs.get("prompt", "")

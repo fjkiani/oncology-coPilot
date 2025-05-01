@@ -14,6 +14,7 @@ import shlex
 import argparse
 from datetime import datetime
 import logging
+import sqlite3 # <--- Import sqlite3
 
 # --- Explicitly add project root to sys.path --- 
 # This helps resolve module imports when running with uvicorn from the project root
@@ -39,9 +40,16 @@ from backend.core.llm_utils import get_llm_text_response
 from backend.agents.comparative_therapy_agent import ComparativeTherapyAgent
 from backend.agents.patient_education_draft_agent import PatientEducationDraftAgent
 from backend.agents.clinical_trial_agent import ClinicalTrialAgent
+from backend.agents.eligibility_deep_dive_agent import EligibilityDeepDiveAgent # <-- Import the new agent
 
 # Import the new research router
 from backend.research.router import router as research_router
+
+# --- Define DB Path (Assuming it's defined elsewhere or in .env) ---
+# If SQLITE_DB_PATH is in .env, it should be loaded via load_dotenv()
+# Otherwise, define it explicitly here or import from a config file
+SQLITE_DB_PATH = os.getenv('SQLITE_DB_PATH', './backend/data/clinical_trials.db') # Example fallback
+# --- End DB Path Definition ---
 
 app = FastAPI()
 
@@ -1139,20 +1147,23 @@ class ConsultationRequest(BaseModel):
     current_history: Optional[List[Dict[str, Any]]] = None # For context aware agents
     replying_to_timestamp: Optional[str] = None # Track message lineage
 
-# --- NEW: Model for Planning Request ---
+# --- NEW: Pydantic Models for Plan Followups ---
 class ActionSuggestion(BaseModel):
-    # Updated to match the structure sent from the frontend (ClinicalTrialAgent output)
-    action_type: str = Field(..., description="Category of suggestion, e.g., TASK, PATIENT_MESSAGE_SUGGESTION") # Renamed from category
+    # Structure based on what ClinicalTrialAgent's ActionSuggester likely provides 
+    # and what handlePlanFollowups in Research.jsx expects to send
+    action_type: str = Field(..., description="Category of suggestion, e.g., TASK, PATIENT_MESSAGE_SUGGESTION") 
     suggestion: str = Field(..., description="Concise text of the suggested action")
     draft_text: Optional[str] = Field(default=None, description="Pre-drafted text for messages, tasks, etc.")
-    criterion: Optional[str] = Field(default=None, description="The related trial criterion text") # Renamed from criterion_text
-    missing_info: Optional[str] = Field(default=None, description="Explanation of what information is missing, if any") # Added field
+    criterion: Optional[str] = Field(default=None, description="The related trial criterion text") 
+    missing_info: Optional[str] = Field(default=None, description="Explanation of what information is missing, if any")
 
 class PlanFollowupsRequest(BaseModel):
     action_suggestions: List[ActionSuggestion]
-    patient_id: Optional[str] = None # Match the key sent from frontend
-    trial_id: Optional[str] = None   # Added: ID of the trial context
-    trial_title: Optional[str] = None # Added: Title of the trial context
+    patient_id: Optional[str] = None 
+    trial_id: Optional[str] = None   # Added: ID of the trial context for association
+    trial_title: Optional[str] = None # Added: Title of the trial context for display
+
+# --- End NEW Pydantic Models ---
 
 # --- Placeholder Planning Agent Logic ---
 
@@ -1197,107 +1208,169 @@ async def plan_followups_logic(
     logging.info(f"Generated {len(tasks)} Kanban tasks from {len(suggestions)} suggestions for patient {patient_id}, trial {trial_id}.")
     return tasks
 
-# --- NEW: Endpoint for Planning Follow-ups --- 
+# --- NEW: Endpoint for Planning Follow-ups (No longer a stub) --- 
 @app.post("/api/plan-followups")
 async def api_plan_followups(request: PlanFollowupsRequest):
     """ 
-    Receives action suggestions and plans Kanban tasks using plan_followups_logic.
+    Receives action suggestions and generates structured Kanban tasks.
+    Calls the plan_followups_logic function to perform the task generation.
     """
-    logging.info(f"Received request to plan follow-ups for patient ID: {request.patient_id}, Trial ID: {request.trial_id}") # Log trial ID
-    logging.info(f"Action Suggestions Received: {len(request.action_suggestions)}")
-    # Log details of a few suggestions for debugging
-    for i, suggestion in enumerate(request.action_suggestions[:3]): 
-        logging.debug(f" Suggestion {i+1}: {suggestion.dict()}") 
-
-    # --- Call the actual planning logic --- 
+    logging.info(f"Received request to plan follow-ups. Patient ID: {request.patient_id}, Trial ID: {request.trial_id}")
+    logging.debug(f"Action Suggestions Received: {request.action_suggestions}")
+    
     try:
+        # Call the actual planning logic
         planned_tasks = await plan_followups_logic(
             suggestions=request.action_suggestions, 
-            patient_id=request.patient_id,
-            trial_id=request.trial_id,          # Pass trial_id
-            trial_title=request.trial_title     # Pass trial_title
+            patient_id=request.patient_id, 
+            trial_id=request.trial_id, 
+            trial_title=request.trial_title
         )
+        logging.info(f"Plan followups logic generated {len(planned_tasks)} tasks.")
+        
+        return {"success": True, "planned_tasks": planned_tasks}
+        
     except Exception as e:
-        logging.error(f"Error calling plan_followups_logic: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to generate planned tasks: {e}")
-    # ---------------------------------------
+        logging.error(f"Error during plan_followups_logic execution: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate follow-up tasks: {e}")
 
-    logging.info(f"Returning {len(planned_tasks)} planned tasks for patient {request.patient_id}, trial {request.trial_id}.") # Log trial ID
-    return {"success": True, "planned_tasks": planned_tasks}
+# --- End Endpoint --- 
 
 # --- Endpoint to get details and analysis for a SINGLE trial --- 
 @app.get("/api/trial-details/{trial_id}")
 async def get_trial_details(trial_id: str, patient_id: str):
     """
-    Fetches details for a specific trial and runs eligibility analysis against a patient.
-    Currently uses placeholder trial data structure.
+    Fetches details for a specific trial from SQLite DB and runs eligibility analysis.
     """
-    logging.info(f"Received request for trial details. Trial ID: {trial_id}, Patient ID: {patient_id}")
+    logging.info(f"[TrialDetails:{trial_id}] Endpoint started for patient {patient_id}") # ADD LOG
+    conn = None # Initialize conn
+    fetched_trial_data = None # Initialize
     
-    # 1. Get Patient Data
-    patient_data = mock_patient_data_dict.get(patient_id)
-    if not patient_data:
-        logging.error(f"Patient data not found for ID: {patient_id}")
-        raise HTTPException(status_code=404, detail=f"Patient data not found for ID: {patient_id}")
-        
-    # 2. Placeholder for fetching real trial data by trial_id
-    # In a real implementation, you would fetch trial details from a database or API using trial_id
-    # For now, create a basic structure using the ID.
-    placeholder_trial_data = {
-        "nct_id": trial_id,
-        "title": f"Placeholder Title for {trial_id}",
-        "status": "Unknown",
-        "phase": "Unknown",
-        "summary": {"description": "Placeholder summary - full trial data not fetched."}, 
-        "eligibility": {
-            "criteria": "Placeholder criteria text - full trial data not fetched.",
-            "gender": "All",
-            "minimum_age": "18 Years",
-            "maximum_age": "N/A"
-        },
-        "locations": [],
-        "contacts": [],
-        "source_url": f"https://clinicaltrials.gov/study/{trial_id}" # Example URL
-    }
-    
-    # 3. Instantiate Agent
-    agent = ClinicalTrialAgent()
-
-    # 4. Run Agent Analysis for this specific trial
     try:
-        # We need a method in the agent to analyze a *single*, pre-fetched trial object
-        # Let's assume a method like `run_single_trial_analysis` exists or needs to be added
-        # It would take the trial data and patient data
+        # 1. Get Patient Data
+        logging.info(f"[TrialDetails:{trial_id}] Getting patient data...") # ADD LOG
+        patient_data = mock_patient_data_dict.get(patient_id)
+        if not patient_data:
+            logging.error(f"[TrialDetails:{trial_id}] Patient data not found for ID: {patient_id}")
+            raise HTTPException(status_code=404, detail=f"Patient data not found for ID: {patient_id}")
+        logging.info(f"[TrialDetails:{trial_id}] Patient data retrieved.") # ADD LOG
+            
+        # 2. Fetch ACTUAL Trial Data from SQLite DB
+        try:
+            logging.info(f"[TrialDetails:{trial_id}] Connecting to SQLite DB: {SQLITE_DB_PATH}") # ADD LOG
+            conn = sqlite3.connect(SQLITE_DB_PATH)
+            conn.row_factory = sqlite3.Row # Important: Get rows as dict-like objects
+            cursor = conn.cursor()
+            logging.info(f"[TrialDetails:{trial_id}] DB Connected. Fetching trial...") # ADD LOG
+            
+            query = "SELECT * FROM clinical_trials WHERE nct_id = ?" 
+            cursor.execute(query, (trial_id,))
+            trial_row = cursor.fetchone()
+            logging.info(f"[TrialDetails:{trial_id}] DB Fetch complete. Trial found: {trial_row is not None}") # ADD LOG
+            
+            if not trial_row:
+                logging.warning(f"[TrialDetails:{trial_id}] Trial {trial_id} not found in the database.")
+                raise HTTPException(status_code=404, detail=f"Trial with ID {trial_id} not found in database.")
+                
+            # Convert row to a standard dictionary
+            fetched_trial_data = dict(trial_row)
+            logging.info(f"[TrialDetails:{trial_id}] Successfully fetched and converted trial data from DB.") # ADD LOG
+            
+        except sqlite3.Error as db_err:
+            logging.error(f"[TrialDetails:{trial_id}] SQLite error fetching trial {trial_id}: {db_err}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Database error fetching trial details.")
+        finally:
+            if conn:
+                logging.info(f"[TrialDetails:{trial_id}] Closing DB connection.") # ADD LOG
+                conn.close()
+                # logging.info(f"[TrialDetails:{trial_id}] Closed SQLite DB connection for {trial_id} fetch.") # Original log - slightly redundant
+        
+        # Ensure fetched_trial_data is available before proceeding
+        if fetched_trial_data is None:
+             logging.error(f"[TrialDetails:{trial_id}] fetched_trial_data is None after DB block. This should not happen.")
+             raise HTTPException(status_code=500, detail="Internal error retrieving trial data.")
+             
+        # 3. Instantiate Agent
+        logging.info(f"[TrialDetails:{trial_id}] Instantiating ClinicalTrialAgent...") # ADD LOG
+        agent = ClinicalTrialAgent()
+        logging.info(f"[TrialDetails:{trial_id}] ClinicalTrialAgent instantiated.") # ADD LOG
+
+        # 4. Run Agent Analysis for this specific trial using FETCHED data
+        logging.info(f"[TrialDetails:{trial_id}] Calling agent.run_single_trial_analysis...") # ADD LOG
         interpreted_result = await agent.run_single_trial_analysis( 
-             trial_data=placeholder_trial_data, 
+             trial_data=fetched_trial_data, 
              patient_data=patient_data
         )
+        logging.info(f"[TrialDetails:{trial_id}] Agent analysis call complete.") # ADD LOG
         
-        logging.info(f"Agent analysis complete for {trial_id}. Status: {interpreted_result.get('eligibility_assessment')}")
+        # Log agent status if available
+        if interpreted_result:
+             logging.info(f"[TrialDetails:{trial_id}] Agent analysis result status: {interpreted_result.get('overall_assessment', 'N/A')}") # Log status
+        else:
+             logging.warning(f"[TrialDetails:{trial_id}] Agent analysis returned None or empty result.")
         
-        # 5. Combine original (placeholder) data with interpreted results
-        # The frontend expects the interpreted result under the 'interpreted_result' key
+        # 5. Combine original FETCHED data with interpreted results
+        logging.info(f"[TrialDetails:{trial_id}] Combining fetched data and agent result...") # ADD LOG
         combined_data = {
-            **placeholder_trial_data, # Spread the original placeholder data
+            **fetched_trial_data, # Spread the fetched data
             "interpreted_result": interpreted_result 
         }
         
+        logging.info(f"[TrialDetails:{trial_id}] Preparing to return successful JSON response.") # ADD LOG
         return {
             "success": True,
             "data": combined_data
         }
 
     except AttributeError as e:
-         # Handle case where the agent method doesn't exist yet
+         # Handle case where the agent method doesn't exist yet (redundant but safe)
+         logging.error(f"[TrialDetails:{trial_id}] AttributeError during execution: {e}", exc_info=True) # ADD LOG + exc_info
          if "run_single_trial_analysis" in str(e):
-             logging.error("ClinicalTrialAgent needs a 'run_single_trial_analysis' method.", exc_info=True)
+             # logging.error("ClinicalTrialAgent needs a 'run_single_trial_analysis' method.", exc_info=True) # Already logged above
              raise HTTPException(status_code=501, detail="Agent analysis method for single trial not implemented.")
          else:
-             logging.error(f"Attribute error during agent analysis for {trial_id}: {e}", exc_info=True)
+             # logging.error(f"Attribute error during agent analysis for {trial_id}: {e}", exc_info=True) # Already logged above
              raise HTTPException(status_code=500, detail=f"Internal error during analysis: {e}")
+    except HTTPException as http_ex:
+         # Re-raise known HTTP exceptions (like 404)
+         logging.warning(f"[TrialDetails:{trial_id}] Raising HTTPException {http_ex.status_code}: {http_ex.detail}") # ADD LOG
+         raise http_ex
     except Exception as e:
-        logging.error(f"Error running analysis for trial {trial_id}: {e}", exc_info=True)
+        logging.error(f"[TrialDetails:{trial_id}] Unexpected error during execution for trial {trial_id}: {e}", exc_info=True) # ADD LOG + exc_info
         raise HTTPException(status_code=500, detail=f"Failed to analyze trial {trial_id}: {str(e)}")
+    # Removed redundant finally block as the connection is closed within the inner try/finally
+
+# --- Deep Dive Endpoint --- 
+
+class DeepDiveRequest(BaseModel):
+    """Request body for initiating an eligibility deep dive."""
+    unmet_criteria: List[Dict[str, Any]] = Field(..., description="List of criteria initially marked as unmet.")
+    unclear_criteria: List[Dict[str, Any]] = Field(..., description="List of criteria initially marked as unclear.")
+    patient_data: Dict[str, Any] = Field(..., description="The full patient data object available at the time of request.")
+    trial_data: Dict[str, Any] = Field(..., description="The trial data object (containing NCT ID, title, etc.).")
+
+@app.post("/api/request-deep-dive")
+async def request_deep_dive(request: DeepDiveRequest):
+    """Triggers the EligibilityDeepDiveAgent to analyze specific criteria."""
+    logging.info(f"Received request for deep dive analysis for trial: {request.trial_data.get('nct_id', 'N/A')}")
+    
+    try:
+        agent = EligibilityDeepDiveAgent()
+        
+        # Pass the necessary data from the request to the agent's run method
+        # Use request.dict() to pass keyword arguments matching the agent's expected kwargs
+        report = await agent.run(**request.dict())
+        
+        logging.info(f"Deep dive analysis completed for trial: {request.trial_data.get('nct_id', 'N/A')}. Summary: {report.get('summary', 'No summary provided.')}")
+        return report
+        
+    except Exception as e:
+        trial_id = request.trial_data.get('nct_id', 'N/A')
+        logging.error(f"Error during deep dive analysis for trial {trial_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"An error occurred during the deep dive analysis: {e}"
+        )
 
 # Add logic to run the app if this script is executed directly
 # (e.g., for development/testing)
