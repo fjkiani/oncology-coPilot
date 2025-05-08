@@ -81,6 +81,30 @@ Cursor learned
 *   **Realistic Mock Data:** When developing features dependent on complex data (like genomics), create mock data structures that accurately reflect the *type* and *format* of clinically relevant, processed information (e.g., summarized mutations, biomarkers), not just raw outputs, to enable realistic agent development.
 *   **NLP for Criterion Detection:** Identifying specific types of criteria (e.g., genomic) within free-text eligibility rules requires robust NLP techniques beyond simple keyword matching, potentially involving regex, named entity recognition, or classifiers for reliable detection.
 *   **Model Output Interpretation:** Integrating specialized AI models (like Evo 2) requires an interpretation layer to translate raw model outputs (scores, likelihoods) into clinically meaningful statuses (MET/NOT_MET/UNCLEAR) and evidence statements suitable for the application context.
+*   **API Client Troubleshooting:** When API client libraries (e.g., `bravado`, `cbio-py`) fail unexpectedly (import errors, `None` results despite successful spec fetch), verify the correct target endpoint path (`/api/.../mutations` vs `/api/.../mutations/fetch`), the required HTTP method (GET vs. POST), and expected payload format (query params vs. JSON body) using simpler tools (`requests`, `curl`) before extensive library debugging. Document the final working approach.
+*   **Python Package Imports:** Verify Python package installation (`pip list | grep <package>`) and ensure the correct module name is used for imports, as it may differ from the installable package name (e.g., `pip install cbio-py` requires `from cbioportalapi import ...`).
+*   **Data Processing Script Robustness:** For scripts processing external files (like TSV/CSV):
+    *   Use `os.path.join`, `os.path.dirname(os.path.abspath(__file__))` for reliable path handling relative to the script's location.
+    *   Explicitly check for input file existence (`os.path.exists`).
+    *   Validate expected column headers against actual file headers early and provide informative error messages.
+    *   Handle potential data type issues during conversion (e.g., pandas `NaN` must become `None` before `json.dump`).
+*   **File Path Management:** When scripts or data files are moved, meticulously update all relative path references within the scripts. Use `os.path` tools for robustness. Use `list_dir` to confirm file locations if unsure.
+*   **Integrating Specialized AI Models (e.g., Evo 2 for VEP):**
+    *   Clearly define the new agent's purpose and how it addresses specific limitations of existing agents (e.g., moving from mutation presence check to functional impact prediction).
+    *   Specify input requirements (e.g., structured variant data, reference genome access, API keys).
+    *   Define the expected output format (e.g., predicted status, score, evidence).
+    *   Outline the interpretation logic needed (e.g., raw score thresholds -> clinical significance).
+    *   Plan the integration mechanism (e.g., how an existing agent like `EligibilityDeepDiveAgent` detects the need and delegates to the specialized agent).
+*   **Data Value vs. Interpretation:** Distinguish between having raw data (e.g., a list of mutations from `merged_mutation_clinical.json`) and having interpreted insights (e.g., the functional impact of those mutations via Evo 2). Plan how agents will use *both* levels of information appropriately.
+*   **Agent Design - Snippet vs. Full Data:** When an agent uses a data snippet for an initial LLM pass (for efficiency) and then uses full data for internal programmatic searches, ensure the snippet includes fields crucial for common high-level checks (e.g., `allergies`, `demographics.dob`) to avoid unnecessary `UNCLEAR` statuses from the LLM pass that then require internal search or next steps to resolve.
+*   **Search Target Order & Specificity:** When an agent uses a list of search targets and breaks after the first match, ensure that more specific `criterion_patterns` (e.g., for "weight loss") are ordered before potentially broader or conflicting patterns (e.g., in general lab targets) to ensure correct target matching for a given criterion. If mysterious mismatches occur, log the exact criterion text and the target ID it matched to for debugging.
+*   **LLM Output Parsing (JSON):** When expecting JSON from an LLM, especially within markdown blocks:
+    *   Strip whitespace from the raw LLM response and the extracted JSON string.
+    *   Prioritize extracting content from ` ```json ... ``` ` blocks.
+    *   Use robust slicing (if start/end markers are clear) or a DOTALL regex for extraction.
+    *   Have fallbacks if markdown is missing (e.g., try parsing the whole string).
+    *   Log the exact string being passed to `json.loads()` for debugging persistent parsing errors.
+    *   Ensure the final parsed object matches the expected type (e.g., a list of objects).
 
 Scratchpad
 Current Task: Develop an AI Cancer Care CoPilot for Oncologists
@@ -123,7 +147,7 @@ Phase 1: Core Infrastructure & AI Foundation (MVP Focus - Mock Integration/Archi
   | - Prompt UI     |     |  + Orchestrator +   |
   | - Role-Hinted   |     |  | Logic to Route  |   |  (Identifies Needs & Routes
   |   Action Btns   |     |  | to Role/Agent   |   |   to appropriate Role's
-   |   (Placeholders)|     |  +--------------+   |
+  |   (Placeholders)|     |  +--------------+   |
                           |         v           |
                           | +-------+---------+ |
                           | | AI Analysis     | |  (e.g., Gemini via Vertex AI
@@ -263,81 +287,104 @@ Develop a dedicated portal within the application to empower cancer researchers 
 
 **Roadmap (Local Data, MVP Focus):**
 
-*   **Phase 1: Data Foundation & Preparation (Local Data Focus)**
-    *   [X] **1.1 Load Local Trial Data:** Parse `documents.json`.
-    *   [X] **1.2 Define Extraction Logic:** Use regex to extract metadata and text sections (title, status, phase, eligibility, etc.) from markdown.
-    *   [X] **1.3 Design Database Schemas (Local SQLite/ChromaDB):**
-        *   SQLite `clinical_trials` table: `nct_id`, `title`, `status`, `phase`, `inclusion_criteria_text`, `exclusion_criteria_text`, etc.
-        *   ChromaDB collection `clinical_trials_eligibility`: `source_url` (ID), `eligibility_vector`.
-    *   [X] **1.4 Choose DB & Embedding Model:** SQLite, ChromaDB. `all-MiniLM-L6-v2`.
-    *   [X] **1.5 Basic Frontend Shell:** `Research.jsx`, `ResultsDisplay.jsx`.
+*   **Phase 1: Data Foundation & Preparation (Local Data Focus)** - COMPLETE
+    *   [X] 1.1 Load Local Trial Data: Parse `documents.json`.
+    *   [X] 1.2 Define Extraction Logic: Use regex to extract metadata and text sections from markdown.
+    *   [X] 1.3 Design Database Schemas (Local SQLite/ChromaDB).
+    *   [X] 1.4 Choose DB & Embedding Model: SQLite, ChromaDB. `all-MiniLM-L6-v2`.
+    *   [X] 1.5 Basic Frontend Shell.
 
-*   **Phase 2: Pre-processing Pipeline & Local DB Loading**
-    *   **[X] 2.1 Build Pre-processing Pipeline Script (`load_trials_local.py`):**
-        *   Input: `documents.json`.
-        *   Parse markdown using regex.
-        *   Connect to SQLite & ChromaDB.
-        *   `CREATE TABLE IF NOT EXISTS` / `CREATE COLLECTION`.
-        *   `INSERT/UPDATE` structured data into SQLite.
-        *   Chunk eligibility text (Currently embedding whole text for MVP).
-        *   Generate embedding for eligibility text.
-        *   `UPSERT` vector into ChromaDB collection.
-    *   [X] **2.2 Run Script & Verify Data:** Executed script, verified data in SQLite and embeddings in ChromaDB.
+*   **Phase 2: Pre-processing Pipeline & Local DB Loading** - COMPLETE
+    *   [X] 2.1 Build Pre-processing Pipeline Script (`load_trials_local.py`).
+    *   [X] 2.2 Run Script & Verify Data.
 
-*   **Phase 3: Agent Integration & Basic Search**
-    *   [X] **3.1 Adapt Backend Agents (`ClinicalTrialAgent`):**
-        *   Initialize SQLite/ChromaDB connections.
-        *   Embed user query.
-        *   Query ChromaDB for top N trial IDs based on eligibility vector similarity.
-        *   Fetch full details for top N trials from SQLite.
-    *   [X] **3.2 Test End-to-End:** Tested search via frontend, fixed display issues.
+*   **Phase 3: Agent Integration & Basic Search** - COMPLETE
+    *   [X] 3.1 Adapt Backend Agents (`ClinicalTrialAgent`).
+    *   [X] 3.2 Test End-to-End.
 
-*   **Phase 4: Detailed AI Eligibility Assessment (Current Focus)** - Mostly Complete
-    *   [X] **4.1 Define Structured Patient Profile Schema:** (Conceptual definition: Diagnosis, Stage, ECOG, Labs, Biomarkers, Comorbidities, Prior Tx).
-    *   [X] **4.2 Implement Patient Data Acquisition:** (Current: Assume passed in `context`).
-    *   [X] **4.3 Integrate LLM Client:** Initialize `google.generativeai` in `ClinicalTrialAgent`.
-    *   [X] **4.4 Design Eligibility Assessment Prompt:** 
-        *   Initial prompts requested JSON, but proved unreliable due to LLM errors (invalid escapes).
-        *   **Final approach:** Prompt instructs LLM to generate **structured plain text** using headers (`== SUMMARY ==`, etc.) and bullet points.
-    *   [X] **4.5 Modify `ClinicalTrialAgent.run`:**
-        *   [X] Retrieve patient profile from `context`.
-        *   [X] For each top trial from SQLite:
-            *   [X] Get full inclusion/exclusion text.
-            *   [X] Format structured text prompt.
-            *   [X] Call LLM API (`self.llm_client.generate_content`) expecting plain text.
-            *   [X] **Parse LLM response:** Implement manual text parser (`_parse_structured_text_response`) using string splitting and regex to handle the structured text format robustly. Build nested dictionary result.
-            *   [X] Add parsed assessment to trial results dictionary.
-            *   [X] Handle LLM/parsing errors gracefully.
-            *   [X] Call Action Suggester using parsed data.
-    *   [X] **4.6 Update API Endpoint:** `/api/find-trials` handles patient context input & returns enriched trial data.
-    *   [X] **4.7 Enhance Frontend (`ResultsDisplay.jsx`):** Display detailed LLM assessment (from text parser output), ensuring correct handling of nested structure.
-    *   **[ ] (NEW TASK) 4.8 Codebase Understanding & Catch-up:** Review the current implementation and interaction between key components (Frontend: Research.jsx, ResultsDisplay.jsx, KanbanBoard.jsx, TaskCard.jsx, PatientTrialMatchView.jsx; Backend: main.py, ClinicalTrialAgent, ActionSuggester, plan_followups_logic) to ensure a comprehensive understanding of the existing Research Portal workflow (Search -> Display -> Plan Followups -> Kanban -> 360 View). Await user-provided code/context for deeper analysis.
+*   **Phase 3.5: Foundational Patient Data Integration** - COMPLETE
+    *   [X] 3.5.1 Fetch & Store BRCA Mutations (cBioPortal API -> `brca_tcga_mutations.json`)
+    *   [X] 3.5.2 Process & Store Clinical Data (TSV -> `brca_tcga_clinical_data.json`)
+    *   [X] 3.5.3 Merge Mutation & Clinical Data (`merged_mutation_clinical.json`)
 
-*   **Phase 5: True Deep Analysis & Agentic Resolution (Current Focus)**
-    *   [ ] **5.1 Refactor Deep Dive Agent (`EligibilityDeepDiveAgent`) for True Depth & Internal Resolution:**
-        *   [X] **5.1.1 Incorporate Initial Reasoning:** Modify `_analyze_single_criterion_async` prompt to include `original_reasoning` from the first analysis pass and instruct the LLM to validate/refute/clarify based on it and the provided patient data snippet. **(DONE - Ready for Test)**
-        *   [ ] **5.1.2 Implement Internal Data Search Logic:** Add logic within the agent's `run` method (after initial LLM analysis loop) to perform targeted searches within the provided `patient_data` (especially `notes`) for keywords related to common gaps (e.g., ECOG, specific labs) before generating external suggestions. **(NEXT STEP)**
-        *   [ ] **5.1.3 Enhance Strategic Next Steps Generation:** Modify the prompt for the 'next steps' LLM call to *only* operate on gaps remaining *after* internal search attempts. Include the outcome of internal searches in the prompt context. Ensure output format supports future action integration.
-        *   [ ] **5.1.4 Refine Agent Report Structure:** Update the structure returned by the agent's `run` method to clearly separate: validated/refuted criteria, internal search findings, remaining gaps, and strategic next steps.
+*   **Phase 4: Detailed AI Eligibility Assessment** - MOSTLY COMPLETE
+    *   [X] 4.1 Define Structured Patient Profile Schema.
+    *   [X] 4.2 Implement Patient Data Acquisition (Use merged data + context).
+    *   [X] 4.3 Integrate LLM Client.
+    *   [X] 4.4 Design & Refine Eligibility Assessment Prompt (structured text output).
+    *   [X] 4.5 Modify `ClinicalTrialAgent.run` (LLM call, parsing, action suggestion).
+    *   [X] 4.6 Update API Endpoint.
+    *   [X] 4.7 Enhance Frontend (`ResultsDisplay.jsx`).
+    *   [ ] 4.8 Codebase Understanding & Catch-up.
+
+*   **Phase 5: True Deep Analysis & Agentic Resolution (Current/Next Focus)**
+        *   [X] **5.1.0 Implement Patient Context Enrichment using Database:** (Prerequisite for subsequent 5.1 tasks)
+            *   [X] 5.1.0a Define Mutation DB Schema (SQLite in `backend/data/patient_data.db`, index `patientId`, secure storage required for HIPAA).
+            *   [X] 5.1.0b Create DB Loading Script (`load_mutations_to_db.py`) to parse `merged_mutation_clinical.json` and insert into DB table.
+            *   [X] 5.1.0c Run DB Loading Script (One-time).
+            *   [X] 5.1.0d Modify Context Assembly Point (`main.py:/api/patients/{patient_id}`) to query DB for mutations by `patient_id`.
+            *   [X] 5.1.0e Add Error Handling (DB connection/query errors).
+            *   [X] 5.1.0f Testing (Verify endpoint returns base data + DB mutations).
+        *   [X] **5.1 Refactor Deep Dive Agent (`EligibilityDeepDiveAgent`) for True Depth & Internal Resolution:**
+            *   **Detailed Plan for 5.1 Completion:**
+                *   [X] **Task 1 (Fix/Complete 5.1.1): Correct & Verify Incorporating Initial Reasoning:** 
+                *   [X] **Task 2 (Implement 5.1.2): Implement Internal Data Search Logic:**
+                *   [X] **Task 3 (Refine 5.1.4 - Part 1): Refine Agent Report Structure:** (Add `internal_search_results` - Completed during 5.1.2)
+                *   [X] **Task 4 (Implement 5.1.3): Enhance Strategic Next Steps Generation:**
+                    *   Goal: Make `refined_next_steps` aware of internal search outcomes.
+                    *   Action: Modify next steps generation logic/prompt to use `internal_search_findings` for context; Generate steps referencing search outcomes.
+                    *   Status: **COMPLETED**
         *   [ ] **5.1.5 Integrate Foundational Genomic Model (e.g., Evo 2) for Genomic Criteria Analysis:**
-            *   **Implementation Plan (Phased & Realistic):**
-                *   [ ] **1. Define Mock Genomic Data Structure:** Add representative `genomics` section (mutations, biomarkers based on clinical reports) to `mock_patient_data_dict` in `main.py`.
-                *   [ ] **2. Create `GenomicAnalystAgent` (Placeholder):** 
-                    *   Create `backend/agents/genomic_analyst_agent.py`.
-                    *   Define class (`AgentInterface`), properties (`name`, `description`).
-                    *   Add `__init__` (placeholder for API client).
-                    *   Define `async run(self, genomic_query: Dict, patient_genomic_data: Dict) -> Dict:`.
-                    *   Implement `run` to log inputs and return a *hardcoded mock analysis* (e.g., `{'predicted_status': 'UNCLEAR', 'evidence': 'Mock genomic analysis placeholder.', 'confidence': 0.5}`).
-                *   [ ] **3. Implement Genomic Criterion Detection (`EligibilityDeepDiveAgent`):** In `_analyze_single_criterion_async`, implement keyword/regex logic to identify genomic criteria (set `is_genomic_criterion` flag).
-                *   [ ] **4. Implement Basic Delegation Logic (`EligibilityDeepDiveAgent`):** In `_analyze_single_criterion_async`, if `is_genomic_criterion`: check if `patient_data['genomics']` exists; if yes, instantiate `GenomicAnalystAgent`, call its `run` (with mock data), use mock result, and skip standard LLM call; if no, mark UNCLEAR due to missing patient genomic data.
-                *   [ ] **5. Initial Testing & Report Structure Refinement:** Test flow, verify delegation to mock agent works, ensure mock results integrate clearly into the deep dive report structure.
-                *   [ ] **6. Integrate Evo 2 API (NVIDIA NIM/BioNeMo):** In `GenomicAnalystAgent`, implement API client init and modify `run` to make actual API calls, format inputs, handle API errors.
-                *   [ ] **7. Implement Interpretation Layer (`GenomicAnalystAgent`):** In `GenomicAnalystAgent.run`, add logic *after* API call to translate raw Evo 2 output (scores, etc.) into the application's required structured format (status, evidence, confidence).
-                *   [ ] **8. (Task 5.2) Enhance Frontend Display:** Update UI to show Evo 2 derived insights distinctly.
-    *   [ ] **5.2 Enhance Frontend Display:** Modify `ResultsDisplay.jsx` to clearly present the richer information from the updated deep dive report (validation status, internal search findings, genomic analysis results, refined actions).
+            *   **Status: UNBLOCKED & NEXT STEP** (5.1 Tasks 1-4 Complete)
+            *   **Original Implementation Plan (Phased & Realistic) - Master Plan:**
+                *   [X] **1. Define Mock Genomic Data Structure:** Add representative `genomics` section... (Status: COMPLETED)
+                *   [X] **2. Create `GenomicAnalystAgent` (Placeholder):** Create file, class structure, placeholder `run`... (Status: COMPLETED)
+                *   [X] **3. Implement Genomic Criterion Detection (`EligibilityDeepDiveAgent`):** Add keyword/regex detection logic... (Status: COMPLETED)
+                *   [X] **4. Implement Basic Delegation Logic (`EligibilityDeepDiveAgent`):** Add `if is_genomic_criterion` block, call placeholder agent... (Status: COMPLETED)
+                *   [X] **5. Initial Testing & Report Structure Refinement:** Test mock flow, verify delegation and report integration... (Status: COMPLETED)
+                *   
+            c
+                *   [ ] **Step 6 (Integrate API):** Implement API client, reference genome access, API calls to get *real* scores from Evo 2 API.
+                *   [ ] **Step 7 (Real Interpretation):** Replace simulated delta scores/interpretation in `GenomicAnalystAgent` with logic based on *real* delta scores from API (incorporates logic developed in 5.1.5a).
+                *   [ ] **Step 8 (Enhance Frontend):** Update UI for specific genomic results.
+                *   **Status (Overall 5.1.5): IN PROGRESS** (Steps 1-5 Complete, Focus on 5.1.5a)
+                
+            *   **Prerequisites & Challenges for Real Evo 2 Integration:** (Expanded)
+                *   **Real Patient Genomic Data Acquisition (Major Challenge - Future Work):** 
+                    *   **Current Status:** The system currently relies on manually defined *mock* genomic data within the `patient_data` object (`mock_patient_data_dict`).
+                    *   **Real-World Problem:** Genomic data in EMRs is often stored non-discretely (e.g., scanned PDFs, text blobs in notes/results). Structured data (discrete fields, FHIR Genomics resources) is inconsistent across systems.
+                    *   **Required Solution (Future Development):** A robust **Upstream EMR Integration Layer** is needed *before* data reaches the agents. This layer must:
+                        *   Connect securely to EMR/LIS systems.
+                        *   Identify and retrieve relevant genomic reports/data.
+                        *   **Parse & Extract:** Use advanced techniques (OCR, NLP for PDFs/text; HL7/FHIR parsers for structured feeds) to extract variant details, interpretations, biomarkers.
+                        *   **Standardize:** Convert data to consistent formats (e.g., HGVS nomenclature).
+                        *   **Structure:** Assemble the data into the JSON format expected by `patient_data['genomics']`.
+                    *   **Implication:** This is a significant, separate data engineering effort requiring specific EMR knowledge and NLP expertise, distinct from the current agent logic development.
+                *   **Need for Clinical Data Context (Future Work):** 
+                    *   **Context:** While the `GenomicAnalystAgent` focuses on VEP using mutation data (like that fetchable from cBioPortal via the provided `test.py` script example), making genomic findings clinically actionable requires correlating them with patient outcomes, treatments, demographics, disease stage, etc.
+                    *   **Requirement:** A parallel effort is needed to acquire structured **Clinical Data** (similar to TCGA clinical datasets) alongside genomic data. This is also likely dependent on the future EMR Integration Layer or direct access to clinical data APIs.
+                    *   **Impact:** Rich clinical data significantly enhances the input for the `EligibilityDeepDiveAgent` (for analyzing non-genomic criteria) and provides essential context for interpreting the significance of genomic findings derived from the `GenomicAnalystAgent`.
+                *   **Reference Genome Access:** The VEP process requires reliable access to a standard human reference genome sequence (e.g., GRCh38) for context extraction.
+                *   **API Access & Management:** Requires setting up and managing access to the chosen Evo 2 API (e.g., NVIDIA NIM/BioNeMo).
+                *   **Interpretation & Validation:** Translating raw Evo 2 delta scores into clinically meaningful statuses requires careful threshold definition and validation (e.g., against ClinVar, expert review).
+                
+            *   **Roadmap Integration & Use Case Context (e.g., Doxorubicin Scenario):** (Restored Notes)
+                *   **Current Focus:** The 8 steps above prioritize building the core `GenomicAnalystAgent` and its foundational Variant Effect Prediction (VEP) capability using Evo 2.
+                *   **Broader Use Case Requirements:** Realizing the full clinical benefits (e.g., for managing doxorubicin toxicity and response) requires integrating the VEP results with additional capabilities:
+                    *   Enhanced patient data model (e.g., cumulative dose, LVEF history).
+                    *   Intelligent monitoring agents (analyzing trends in labs/vitals).
+                    *   Context-aware clinical trial matching (using VEP results, dose, LVEF etc.).
+                    *   Care coordination features (e.g., automated alerts/drafts for specialists).
+                *   **Proposed Strategy:** 
+                    1.  Complete the current 8-step roadmap for Task 5.1.5 first (including the simulation sub-task 5.1.5a) to deliver the core VEP engine.
+                    2.  Subsequently, define *new roadmap tasks* to build the other necessary components (monitoring agents, data model enhancements, etc.) that leverage the `GenomicAnalystAgent`'s output to address complex clinical scenarios like the doxorubicin example.
+                    
+    *   [ ] **5.2 Enhance Frontend Display:** Modify `ResultsDisplay.jsx` to clearly present the richer information from the updated deep dive report (validation status, internal search findings, genomic analysis results, refined actions). (Partially addressed by recent UI updates)
     *   [ ] **5.3 Integrate Actions with Workflow (Future):**
         *   [ ] Convert structured `strategic_next_steps` into actionable items (e.g., create tasks in Kanban board automatically or via user confirmation).
         *   [ ] Explore triggering other agents based on specific `action_type` outputs.
+
+        
 
 *   **Phase 6+: Enhancements (Post-MVP)**
     *   [ ] Refine eligibility chunking/embedding strategy.
@@ -505,3 +552,76 @@ Development Strategy for Specialization:
 
 7.  **UI/Explainability (Placeholder):**
     *   Consider how the VEP results (prediction, score, evidence) will eventually be displayed to the user in the frontend. This doesn't need full implementation now but should be kept in mind.
+
+Phase 3.5: Data Foundation & Eligibility Agent - COMPLETE (as of this review)
+  [X] Define cBioPortal Data Needs (Mutations, Clinical for TCGA-BRCA)
+  [X] Implement Python Script to Fetch Mutation Data (Requests, save to JSON)
+  [X] Implement Python Script to Process Clinical TSV to JSON (Pandas, specific columns)
+  [X] Implement Python Script to Merge Mutation & Clinical JSON (based on Patient ID)
+  [X] Design SQLite Schema for Patient Mutations (`patient_data.db`, `mutations` table)
+  [X] Implement Robust Loading Script for Merged JSON to SQLite DB
+  [X] Modify `/api/patients/{patient_id}` to Query DB & Add Mutations to Patient Context
+  [X] Enhance `EligibilityDeepDiveAgent`:
+      [X] Task 5.1.1: Handle Original Reasoning (Ensure `original_reasoning` is passed and used in LLM prompt) - VERIFIED
+      [X] Task 5.1.2: Internal Data Search (Implement `SEARCH_TARGETS`, helper functions, search full `patient_data` for `UNCLEAR` items, store `internal_search_findings`) - IMPLEMENTED & TESTED
+      [X] Task 5.1.3: Refine Report Structure (Ensure findings are part of the output) - VERIFIED
+      [X] Task 5.1.4: Strategic Next Steps (Refined LLM prompt including internal search context, robust JSON parsing) - IMPLEMENTED & TESTED (Parsing fixed!)
+      [X] Task 5.1.5a: Simulate `GenomicAnalystAgent` (Mock VEP logic based on gene rules, intent, return structured status/evidence) - IMPLEMENTED & TESTED
+
+Phase 4: Agent Refinement & Advanced Capabilities (NEW)
+
+Overall Goal: Mature the `EligibilityDeepDiveAgent` and begin work on a more sophisticated `GenomicAnalystAgent` leveraging real VEP capabilities.
+
+Sub-Task Group 1: `EligibilityDeepDiveAgent` Refinements
+  Description: Address remaining issues and enhance the search capabilities of the existing deep dive agent.
+  Tasks:
+    [ ] 1.1: **Fix Weight Loss Criterion Mis-Match:** Investigate why the "weight loss" criterion incorrectly matches an unrelated target (e.g., `liver_enzymes` resulting in an "alt" keyword match) even after reordering search targets. Add targeted logging for `criterion_text` and `target_id` upon match within the internal search loop if the issue persists to understand the incorrect association. // DE-PRIORITIZED FOR NOW
+    [ ] 1.2: **Improve ECOG Performance Status Detection:** Review and enhance the regex patterns within the `ecog_ps` target's `keywords` to more reliably detect *actual ECOG scores* (e.g., "ECOG 1", "KPS 90") in notes, not just general mentions of "performance status." Ensure context capture is sufficient.
+    [ ] 1.3: **Add More Common Search Targets:** Identify and implement 2-3 additional common eligibility criteria categories as new search targets (e.g., specific prior therapy types, history of specific procedures like radiation, common comorbidities like cardiovascular disease).
+
+Sub-Task Group 2: Advanced Status Determination (EligibilityDeepDiveAgent)
+  Description: Enable the agent to more intelligently update criterion status based on its findings.
+  Tasks:
+    [ ] 2.1: **Internal Findings → Status Update Logic:** Design and implement logic where a high-confidence, definitive internal search finding can directly change a criterion's status (e.g., from `UNCLEAR` to `MET` if a lab value is clearly within range or a specific mutation is found/absent as required).
+    [ ] 2.2: **Confidence Scoring for Internal Findings:** Develop a preliminary confidence scoring mechanism for internal search findings (e.g., direct lab match = high, keyword in note = medium) to gate the status update logic.
+
+Sub-Task Group 3: `GenomicAnalystAgent` V1 (Simulated VEP)
+  Description: Develop a V1 `GenomicAnalystAgent` that can interpret common types of genomic eligibility criteria using a sophisticated local simulation of Variant Effect Prediction (VEP). This simulation will be based on the **conceptual approach of Delta Likelihood Scoring** described in `evo2.md` and specific logic adapted from the "Evo2 BRCA1 VEP notebook" (details needed). This V1 will not call external APIs.
+  Overall Goal for V1:
+    - Accurately parse genomic criteria to identify gene(s), specific variants, and required status (e.g., mutated, wild-type, activating, loss-of-function).
+    - Use the patient's `mutations` list (from `patient_data.db`).
+    - Apply a rule-based/simulated VEP logic **inspired by Delta Likelihood concepts** (and derived from Evo2 notebook details TBD) to assess the significance of relevant patient mutations.
+    - Determine if the criterion is MET, NOT_MET, or UNCLEAR based on the simulated functional impact.
+    - Provide clear evidence and details about the "simulated VEP" findings.
+
+  Tasks:
+    [ ] 3.1: **Define `GenomicAnalystAgent` V1 Specification (Detailed):**
+        *   [X] 3.1.1: Finalize Input Data Structure: (Patient Mutations list, Criterion Text) - Done
+        *   [ ] 3.1.2: Define Criterion Parsing & Intent Extraction Logic: (Identify genes, variants, intent - e.g., activating, pathogenic, wild-type, resistance).
+        *   [ ] 3.1.3: Design **Rule-Based** Simulated VEP Logic:
+                *   Define rules using `variant_type`: Map types like 'Frame_Shift_Del', 'Nonsense_Mutation' to 'PREDICTED_PATHOGENIC/LOF'. Map 'Missense_Mutation' to 'PREDICTED_VUS' initially unless specific variant rules apply.
+                *   Define handling for specific known variants: Create data structure (e.g., dict) mapping Gene -> ProteinChange -> Classification (e.g., `{'BRAF': {'V600E': 'PREDICTED_ACTIVATING'}, 'EGFR': {'T790M': 'PREDICTED_RESISTANCE'}}`).
+                *   Define logic for 'WILD_TYPE' status determination (e.g., no relevant classified mutations found for the gene).
+                *   Classification output will be strings (e.g., 'PREDICTED_PATHOGENIC'), **not** a numeric score for V1.
+        *   [ ] 3.1.4: Finalize Output Data Structure (Pydantic model):
+                *   `status`: Literal["MET", "NOT_MET", "UNCLEAR"]
+                *   `evidence`: str
+                *   `simulated_vep_details`: Optional[List[Dict[str, Any]]]
+                    *   `gene_symbol`: str
+                    *   `variant_identified`: str
+                    *   `simulated_classification`: str
+                    *   `classification_reasoning`: str (e.g., "Rule: Frame_Shift variant", "Rule: Known activating mutation").
+
+    [ ] 3.2: **Implement Genomic Criterion Parser (`GenomicAnalystAgent`):**
+        *   [ ] 3.2.1: Implement gene name extraction.
+        *   [ ] 3.2.2: Implement specific variant extraction.
+        *   [ ] 3.2.3: Implement intent determination.
+
+    [ ] 3.3: **Implement Rule-Based Simulated VEP Logic (`GenomicAnalystAgent`):**
+        *   [ ] 3.3.1: Implement `classify_variant(variant_data, gene_context, criterion_intent)` function based on rules defined in 3.1.3.
+        *   [ ] 3.3.2: Implement lookup for known activating/resistance mutations.
+
+    [ ] 3.4: **Implement Core `run` Method of `GenomicAnalystAgent` V1:**
+        *   (Sub-tasks remain largely the same - orchestrate parser, iterate mutations, apply `classify_variant`, determine overall status, construct output).
+
+    [ ] 3.5: **Unit Testing for `

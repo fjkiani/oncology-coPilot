@@ -280,35 +280,88 @@ const InterpretedTrialResult = ({
                       <p className="mt-2 text-xs text-red-600 bg-red-50 p-2 rounded border border-red-200">Error: {deepDiveError}</p>
                   )}
                   {deepDiveReport && (
-                     <div className="mt-2 text-xs space-y-2">
+                     <div className="mt-3 p-3 border border-gray-200 rounded-md bg-gray-50 text-xs space-y-3">
                          {/* Summary */}
-                         <div className="bg-indigo-50 p-2 rounded border border-indigo-100">
-                            <p className="font-semibold text-indigo-800">Deep Dive Summary:</p> 
-                            <p className="text-indigo-700">{deepDiveReport.summary}</p>
+                         <div className="p-2 rounded border border-indigo-200 bg-indigo-100">
+                            <p className="font-semibold text-indigo-800 text-sm">Deep Dive Summary:</p> 
+                            <p className="text-indigo-700 mt-0.5">{deepDiveReport.summary}</p>
                          </div>
                          
-                         {/* Clarified Items */}
+                         {/* Clarified Items - MET/NOT_MET Distinction */}
                          {deepDiveReport.clarified_items?.length > 0 && (
-                            <div className="bg-green-50 p-2 rounded border border-green-100">
-                                <p className="font-semibold text-green-800">Clarified ({deepDiveReport.clarified_items.length}):</p>
-                                <ul className="list-disc list-inside pl-2">
-                                    {deepDiveReport.clarified_items.map((item, idx) => (
-                                        <li key={`clarified-${idx}`} className="text-green-700">
-                                            <span className="font-medium">{item.criterion}</span> ({item.deep_dive_status}): <span className="italic">{item.deep_dive_evidence}</span>
+                            <div>
+                                <h6 className="flex items-center font-semibold text-sm text-gray-700 mb-1.5">
+                                    <InformationCircleIcon className="h-4 w-4 mr-1.5 text-blue-600" />
+                                    Clarified Criteria ({deepDiveReport.clarified_items.length}):
+                                </h6>
+                                <ul className="space-y-2">
+                                    {deepDiveReport.clarified_items.map((item, idx) => {
+                                        const isMet = item.deep_dive_status === "MET";
+                                        const colorBase = isMet ? "green" : "red";
+                                        const Icon = isMet ? CheckCircleIcon : XCircleIcon;
+                                        return (
+                                            <li key={`clarified-${idx}`} className={`p-2 rounded border border-${colorBase}-200 bg-${colorBase}-50`}>
+                                                <div className="flex items-start">
+                                                    <Icon className={`h-4 w-4 mr-1.5 text-${colorBase}-600 flex-shrink-0 mt-0.5`} />
+                                                    <div>
+                                                        <span className={`font-medium text-xs text-${colorBase}-800 block`}>{item.criterion}</span> 
+                                                        <span className={`italic text-xs text-${colorBase}-700 block mt-0.5`}>Status: {item.deep_dive_status} - {item.deep_dive_evidence}</span>
+                                                        <span className="text-xs text-gray-500 block mt-0.5">(Source: {item.analysis_source})</span>
+                                                    </div>
+                                                </div>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            </div>
+                         )}
+
+                         {/* Gaps with Potential Context */}
+                         {deepDiveReport.gaps_with_potential_context?.length > 0 && (
+                            <div>
+                                <h6 className="flex items-center font-semibold text-sm text-gray-700 mb-1.5">
+                                    <ExclamationTriangleIcon className="h-4 w-4 mr-1.5 text-yellow-600" />
+                                    Gaps with Potential Context ({deepDiveReport.gaps_with_potential_context.length}):
+                                </h6>
+                                <ul className="space-y-2">
+                                    {deepDiveReport.gaps_with_potential_context.map((item, idx) => (
+                                        <li key={`gap-context-${idx}`} className="p-2 rounded border border-yellow-200 bg-yellow-50">
+                                            <span className="font-medium text-xs text-yellow-800 block">{item.criterion}</span> 
+                                            <span className="italic text-xs text-yellow-700 block mt-0.5">Status: {item.deep_dive_status} - {item.deep_dive_evidence || item.original_reasoning}</span>
+                                            {item.internal_search_findings && (
+                                                <div className="mt-1.5 pt-1.5 border-t border-yellow-200">
+                                                    <p className="text-xs font-semibold text-yellow-900 mb-1">Potential Context Found:</p>
+                                                    {item.internal_search_findings.potential_findings === null ? (
+                                                        <p className="text-xs text-gray-500 italic pl-2">Internal search performed; no specific mentions found.</p>
+                                                    ) : (
+                                                        <ul className="list-disc list-inside pl-2 space-y-0.5">
+                                                            {(item.internal_search_findings.potential_findings || []).map((finding, findIdx) => (
+                                                                <li key={`finding-${idx}-${findIdx}`} className="text-xs text-gray-600">
+                                                                    <span className="font-medium">[{finding.source}]:</span> {finding.context}
+                                                                </li>
+                                                            ))}
+                                                        </ul>
+                                                    )}
+                                                </div>
+                                            )}
                                         </li>
                                     ))}
                                 </ul>
                             </div>
                          )}
 
-                         {/* Remaining Gaps */}
-                         {deepDiveReport.remaining_gaps?.length > 0 && (
-                            <div className="bg-yellow-50 p-2 rounded border border-yellow-100">
-                                <p className="font-semibold text-yellow-800">Remaining Gaps ({deepDiveReport.remaining_gaps.length}):</p>
-                                <ul className="list-disc list-inside pl-2">
-                                    {deepDiveReport.remaining_gaps.map((item, idx) => (
-                                        <li key={`gap-${idx}`} className="text-yellow-700">
-                                            <span className="font-medium">{item.criterion}</span> ({item.deep_dive_status}): <span className="italic">{item.deep_dive_evidence || item.original_reasoning}</span>
+                         {/* Gaps Requiring External Data */}
+                         {deepDiveReport.gaps_requiring_external_data?.length > 0 && (
+                            <div>
+                                 <h6 className="flex items-center font-semibold text-sm text-gray-700 mb-1.5">
+                                     <QuestionMarkCircleIcon className="h-4 w-4 mr-1.5 text-gray-500" />
+                                     Gaps Requiring External Data ({deepDiveReport.gaps_requiring_external_data.length}):
+                                 </h6>
+                                <ul className="space-y-2">
+                                    {deepDiveReport.gaps_requiring_external_data.map((item, idx) => (
+                                        <li key={`gap-external-${idx}`} className="p-2 rounded border border-gray-200 bg-gray-100">
+                                            <span className="font-medium text-xs text-gray-800 block">{item.criterion}</span> 
+                                            <span className="italic text-xs text-gray-600 block mt-0.5">Status: {item.deep_dive_status} - {item.deep_dive_evidence || item.original_reasoning}</span>
                                         </li>
                                     ))}
                                 </ul>
@@ -317,13 +370,18 @@ const InterpretedTrialResult = ({
 
                          {/* Refined Next Steps */}
                          {deepDiveReport.refined_next_steps?.length > 0 && (
-                            <div className="bg-purple-50 p-2 rounded border border-purple-100">
-                                <p className="font-semibold text-purple-800">Refined Next Steps:</p>
-                                <ul className="list-disc list-inside pl-2 space-y-1">
+                             <div>
+                                <h6 className="flex items-center font-semibold text-sm text-gray-700 mb-1.5">
+                                    <FlagIcon className="h-4 w-4 mr-1.5 text-purple-600" />
+                                    Prioritized Next Steps:
+                                </h6>
+                                <ul className="space-y-1.5">
                                     {deepDiveReport.refined_next_steps.map((step, idx) => (
-                                        <li key={`step-${idx}`} className="text-purple-700">
-                                            <strong>{step.action_type || 'INFO'}:</strong> {step.description}
-                                            {step.rationale && <em className="ml-1 text-xs text-purple-600">({step.rationale})</em>}
+                                        <li key={`step-${idx}`} className="p-2 rounded border border-purple-200 bg-purple-50 text-purple-800">
+                                            <strong className="text-purple-900">{step.action_type || 'INFO'}:</strong> 
+                                            <span className="ml-1">{step.description}</span>
+                                            {step.rationale && <em className="block text-xs text-purple-700 mt-0.5">Rationale: {step.rationale}</em>}
+                                            {step.details && <span className="block text-xs text-purple-600 mt-0.5">Details: {step.details}</span>}
                                         </li>
                                     ))}
                                 </ul>

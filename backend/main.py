@@ -48,7 +48,8 @@ from backend.research.router import router as research_router
 # --- Define DB Path (Assuming it's defined elsewhere or in .env) ---
 # If SQLITE_DB_PATH is in .env, it should be loaded via load_dotenv()
 # Otherwise, define it explicitly here or import from a config file
-SQLITE_DB_PATH = os.getenv('SQLITE_DB_PATH', './backend/data/clinical_trials.db') # Example fallback
+TRIALS_DB_PATH = os.getenv('SQLITE_DB_PATH', './backend/data/clinical_trials.db') # Existing path for trials
+PATIENT_MUTATIONS_DB_PATH = os.path.join(PROJECT_ROOT, 'backend', 'data', 'patient_data.db')
 # --- End DB Path Definition ---
 
 app = FastAPI()
@@ -211,13 +212,41 @@ async def authenticate_websocket_token(token: str) -> Optional[str]:
 async def get_patient_data(patient_id: str):
     # In a real app, you'd query a database based on patient_id
     # For MVP, just return the mock data if the ID matches
-    patient_data = mock_patient_data_dict.get(patient_id)
-    if patient_data:
-        # Return the expected structure for the frontend
-        return {"success": True, "data": patient_data} 
-    else:
-        # Use HTTPException for proper error response
+    patient_info = mock_patient_data_dict.get(patient_id)
+    if not patient_info:
         raise HTTPException(status_code=404, detail="Patient not found")
+
+    # --- Fetch mutations from patient_data.db ---
+    mutations = []
+    conn = None
+    try:
+        print(f"Connecting to mutations DB at: {PATIENT_MUTATIONS_DB_PATH}")
+        if not os.path.exists(PATIENT_MUTATIONS_DB_PATH):
+            print(f"Warning: Mutations database not found at {PATIENT_MUTATIONS_DB_PATH}. Patient will have no mutations.")
+        else:
+            conn = sqlite3.connect(PATIENT_MUTATIONS_DB_PATH)
+            conn.row_factory = sqlite3.Row # To access columns by name
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM mutations WHERE patient_id = ?", (patient_id,))
+            rows = cursor.fetchall()
+            mutations = [dict(row) for row in rows] # Convert rows to list of dicts
+            print(f"Fetched {len(mutations)} mutations for patient {patient_id}")
+            
+    except sqlite3.Error as e:
+        print(f"Database error when fetching mutations for patient {patient_id}: {e}")
+        # Optionally, raise an HTTPException or return patient_info without mutations
+    except Exception as e:
+        print(f"Unexpected error when fetching mutations for patient {patient_id}: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+    # Add mutations to the patient_info
+    # Make a copy to avoid modifying the original mock_patient_data_dict in memory
+    patient_info_with_mutations = patient_info.copy()
+    patient_info_with_mutations["mutations"] = mutations
+    
+    return patient_info_with_mutations
 
 # --- New Prompt Endpoint using Orchestrator --- 
 class PromptRequest(BaseModel):
@@ -1257,8 +1286,8 @@ async def get_trial_details(trial_id: str, patient_id: str):
             
         # 2. Fetch ACTUAL Trial Data from SQLite DB
         try:
-            logging.info(f"[TrialDetails:{trial_id}] Connecting to SQLite DB: {SQLITE_DB_PATH}") # ADD LOG
-            conn = sqlite3.connect(SQLITE_DB_PATH)
+            logging.info(f"[TrialDetails:{trial_id}] Connecting to SQLite DB: {TRIALS_DB_PATH}") # ADD LOG
+            conn = sqlite3.connect(TRIALS_DB_PATH)
             conn.row_factory = sqlite3.Row # Important: Get rows as dict-like objects
             cursor = conn.cursor()
             logging.info(f"[TrialDetails:{trial_id}] DB Connected. Fetching trial...") # ADD LOG

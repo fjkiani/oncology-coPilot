@@ -18,9 +18,106 @@ except ImportError:
         async def run(self, **kwargs) -> Dict[str, Any]:
             raise NotImplementedError
 
-# Mock knowledge base (can be expanded)
+# --- Search Logic Configuration ---
+
+# Mock knowledge base (can be expanded or moved to config)
 KNOWN_PGP_INHIBITORS = ['nelfinavir', 'indinavir', 'saquinavir', 'ritonavir', 'ketoconazole', 'itraconazole']
-KNOWN_AZOLE_ANTIFUNGALS = ['itraconazole', 'ketaconazole', 'voriconazole', 'fluconazole', 'posaconazole']
+KNOWN_AZOLE_ANTIFUNGALS = ['itraconazole', 'ketoconazole', 'voriconazole', 'fluconazole', 'posaconazole']
+
+# Define Search Targets for Internal Data Lookup
+SEARCH_TARGETS = [
+    {
+        "id": "ecog_ps", # Target identifier
+        "criterion_patterns": [r"ecog", r"performance status", r"karnofsky", r"kps"], # Regex patterns to match criterion text
+        "search_fields": ["notes"], # Where to look in patient_data
+        "search_type": "keyword_sentence", # How to search (e.g., find sentences with keywords)
+        "keywords": ["ecog", "ps", "performance status", "kps", "karnofsky", "ambulatory", "bedridden", r"ecog\s*\d", r"kps\s*\d+"] # Keywords/patterns to find *within* the field
+    },
+    {
+        "id": "platelet",
+        "criterion_patterns": [r"platelet", r"plt", r"thrombocyte"],
+        "search_fields": ["recentLabs"],
+        "search_type": "lab_component", # Special type for labs
+        "lab_test_keywords": ["platelet", "plt"] # Keywords to match lab component 'test' name
+    },
+    {
+        "id": "anc",
+        "criterion_patterns": [r"anc", r"absolute neutrophil"],
+        "search_fields": ["recentLabs"],
+        "search_type": "lab_component",
+        "lab_test_keywords": ["anc", "absolute neutrophil", "neutrophils abs"]
+    },
+    {
+        "id": "hemoglobin",
+        "criterion_patterns": [r"hemoglobin", r"hgb", r"hb"],
+        "search_fields": ["recentLabs"],
+        "search_type": "lab_component",
+        "lab_test_keywords": ["hemoglobin", "hgb", "hb"]
+    },
+    {
+        "id": "creatinine",
+        "criterion_patterns": [r"creatinine", r"crcl", r"renal function", r"kidney function"],
+        "search_fields": ["recentLabs"],
+        "search_type": "lab_component",
+        "lab_test_keywords": ["creatinine", "crcl", "creat"]
+    },
+    {
+        "id": "bilirubin",
+        "criterion_patterns": [r"bilirubin", r"bili"],
+        "search_fields": ["recentLabs"],
+        "search_type": "lab_component",
+        "lab_test_keywords": ["bilirubin", "bili", "total bilirubin"]
+    },
+    {
+        "id": "liver_enzymes",
+        "criterion_patterns": [r"alt", r"sgpt", r"ast", r"sgot", r"liver function", r"hepatic function"],
+        "search_fields": ["recentLabs"],
+        "search_type": "lab_component",
+        "lab_test_keywords": ["alt", "sgpt", "ast", "sgot", "alanine aminotransferase", "aspartate aminotransferase"]
+    },
+    {
+        "id": "specific_mutation",
+        "criterion_patterns": [
+            # More specific patterns first
+            r"(?:(?:presence|absence)\s+of\s+)?(?:activating|pathogenic|deleterious)?\s+([a-zA-Z0-9]+)\s+(?:mutation|variant|alteration)", # e.g., "KRAS mutation", "activating BRAF mutation"
+            r"([a-zA-Z0-9]+)\s+(?:positive|negative|mutated|wild-type|wt)" # e.g., "EGFR positive", "TP53 mutated"
+        ],
+        "search_fields": ["mutations"],
+        "search_type": "mutation_lookup", # Special type for mutations list
+        "capture_group": 1 # Which regex group captures the gene name
+    },
+    {
+        "id": "weight_loss_history",
+        "criterion_patterns": [
+            r"weight loss", r"lost weight", r"gained weight", 
+            r"unintentional weight loss", r"significant weight change",
+            r"cachexia", r"nutritional status", r"bmi change"
+        ],
+        "search_fields": ["notes", "diagnosis"], # Check notes and diagnosis fields
+        "search_type": "keyword_sentence",
+        "keywords": [
+            "weight loss", "lost", "gained", "lbs", "kg", "pounds", "kilograms",
+            "cachectic", "malnourished", "bmi", "unintentional change"
+        ]
+    },
+    {
+        "id": "pgp_inhibitor",
+        "criterion_patterns": [r"p-gp inhibitor", r"p-glycoprotein inhibitor"],
+        "search_fields": ["currentMedications"],
+        "search_type": "medication_check", # Special type
+        "known_list": KNOWN_PGP_INHIBITORS # Use the list defined earlier
+    },
+    {
+        "id": "azole_antifungal",
+        "criterion_patterns": [r"azole antifungal"],
+        "search_fields": ["currentMedications"],
+        "search_type": "medication_check",
+        "known_list": KNOWN_AZOLE_ANTIFUNGALS
+    },
+    # TODO: Add more targets: VTE history, prior therapy, transplant history etc.
+]
+
+# --- End Search Logic Configuration ---
 
 # --- Constants (Should match ClinicalTrialAgent or be centralized) ---
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-1.5-flash-latest")
@@ -35,6 +132,13 @@ DEFAULT_LLM_GENERATION_CONFIG = {
     # "response_mime_type": "text/plain", # Already default 
 }
 # --- End Constants ---
+
+# Attempt to import the specific agent, handle if not found
+try:
+    from .genomic_analyst_agent import GenomicAnalystAgent
+except ImportError:
+    logging.warning("GenomicAnalystAgent not found. Genomic analysis features will be unavailable.")
+    GenomicAnalystAgent = None # Set to None if import fails
 
 class EligibilityDeepDiveAgent(AgentInterface):
     """
@@ -73,13 +177,13 @@ class EligibilityDeepDiveAgent(AgentInterface):
              # Use self.name (the property) in logging
             logging.error(f"[{self.name}] GOOGLE_API_KEY environment variable not set. LLM features will be disabled.")
 
-    async def _analyze_single_criterion_async(self, criterion: str, patient_data: Dict[str, Any], trial_id: str) -> Dict[str, Any]:
-        """Analyzes a single criterion asynchronously."""
+    async def _analyze_single_criterion_async(self, criterion: str, original_reasoning: str, patient_data: Dict[str, Any], trial_id: str) -> Dict[str, Any]:
+        """Analyzes a single criterion asynchronously, using original reasoning context."""
         result = {
             "criterion": criterion,
             "status": "UNCLEAR",
             "evidence": "",
-            "analysis_source": "Standard LLM"
+            "analysis_source": "Standard LLM" # Default source
         }
 
         # --- Refined Genomic Criterion Detection ---
@@ -104,12 +208,14 @@ class EligibilityDeepDiveAgent(AgentInterface):
 
         # Require BOTH a gene-related term AND a status/test-related term
         if contains_gene_keyword and contains_status_keyword:
-            # Basic check to avoid matching simple mentions like "prior AKT inhibitor"
-            # If it contains "prior" or "inhibitor" near the gene name, maybe don't class as genomic analysis needed?
-            # This heuristic might need refinement. For now, we rely on requiring a status keyword.
-            is_genomic_criterion = True
-            result["analysis_source"] = "GenomicAnalystAgent (Attempt)" # Tentatively set source
-            logging.info(f"[EligibilityDeepDiveAgent:{trial_id}] Detected potential genomic criterion (refined): {criterion}")
+            # Added exclusion check
+            exclusion_keywords = ["inhibitor", "prior", "history of"]
+            if not any(ex_kw in criterion_lower for ex_kw in exclusion_keywords):
+                is_genomic_criterion = True
+                result["analysis_source"] = "GenomicAnalystAgent (Attempt)"
+                logging.info(f"[{self.name}:{trial_id}] Detected potential genomic criterion (refined): {criterion[:80]}...")
+            else:
+                logging.debug(f"[{self.name}:{trial_id}] Criterion contains gene but also exclusion keywords; treating as non-genomic: {criterion[:80]}...")
         # --- End Refined Detection ---
 
         # If it's a genomic criterion and we have genomic data, delegate to GenomicAnalystAgent
@@ -167,32 +273,35 @@ class EligibilityDeepDiveAgent(AgentInterface):
         try:
             # Prepare the prompt for the LLM
             prompt = f"""
-            Analyze this clinical trial eligibility criterion based ONLY on the provided patient data:
+            Analyze this clinical trial eligibility criterion based ONLY on the provided patient data snippet.
             
             Criterion: {criterion}
+            
+            Initial Assessment Reasoning provided previously: "{original_reasoning}"
             
             Patient Data Snippet (JSON):
             ```json
             {json.dumps(patient_data, indent=2, default=str)} 
             ```
             
-            Task: Determine if the patient meets this single criterion based *only* on the data provided.
+            Task: Re-evaluate the criterion based ONLY on the Patient Data Snippet provided.
+            Critically address the Initial Assessment Reasoning: Does the snippet confirm it, refute it, or is the snippet still insufficient to address that specific point?
             
             Respond with ONLY the following structure:
             STATUS: [MET | NOT_MET | UNCLEAR]
-            REASONING: [Your brief 1-2 sentence reasoning, referencing the patient data or lack thereof.]
+            REASONING: [Your brief 1-2 sentence reasoning, EXPLICITLY referencing the Initial Assessment Reasoning and how the Patient Data Snippet confirms/refutes/is still insufficient for it.]
             
-            Example 1:
+            Example 1 (Data Confirms Initial Gap Resolved):
             STATUS: MET
-            REASONING: Patient's recent labs show platelet count of 250 K/uL, which meets the >= 150 K/uL requirement.
+            REASONING: Initial reasoning stated 'No lab data provided'. The snippet includes recent labs showing Platelets = 250 K/uL, which meets the >= 150 K/uL requirement.
             
-            Example 2:
+            Example 2 (Data Still Insufficient):
             STATUS: UNCLEAR
-            REASONING: The criterion requires ECOG performance status, but this information is not present in the provided patient data snippet.
+            REASONING: Initial reasoning stated 'ECOG status is missing'. The provided Patient Data Snippet still does not contain ECOG performance status.
             
-            Example 3:
+            Example 3 (Data Refutes Initial Gap - Finds Contraindication):
             STATUS: NOT_MET
-            REASONING: Patient is documented as having an allergy to Penicillin, which is listed as a contraindication in the criterion.
+            REASONING: Initial reasoning stated 'Allergy info missing'. The snippet shows an allergy to Penicillin, which is listed as an exclusion.
             """
 
             # --- FIX: Use generate_content_async ---
@@ -228,8 +337,8 @@ class EligibilityDeepDiveAgent(AgentInterface):
             logging.debug(f"[{self.name}:{trial_id}] Raw LLM response for standard criterion: {response_text[:150]}...")
 
             # --- Parse the STATUS/REASONING response ---
-            status_match = re.search(r"STATUS:\\s*(MET|NOT_MET|UNCLEAR)", response_text, re.IGNORECASE)
-            reasoning_match = re.search(r"REASONING:\\s*(.*)", response_text, re.IGNORECASE | re.DOTALL)
+            status_match = re.search(r"STATUS:\s*(MET|NOT_MET|UNCLEAR)", response_text, re.IGNORECASE)
+            reasoning_match = re.search(r"REASONING:\s*(.*)", response_text, re.IGNORECASE | re.DOTALL)
             
             if status_match and reasoning_match:
                 result["status"] = status_match.group(1).upper()
@@ -255,392 +364,484 @@ class EligibilityDeepDiveAgent(AgentInterface):
         # result["evidence"] = "Analysis flow reached an unexpected state."
         # return result
 
-    async def run(self, **kwargs) -> Dict[str, Any]:
+    async def run(self, unmet_criteria: List[Dict[str, Any]], unclear_criteria: List[Dict[str, Any]], patient_data: Dict[str, Any], trial_data: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         """
-        Runs the deep dive analysis on unmet/unclear criteria using concurrent LLM calls.
+        Analyzes a list of unmet and unclear criteria against patient data.
+        Enhances the analysis by considering any original reasoning provided.
         """
-        unmet_criteria = kwargs.get('unmet_criteria', [])
-        unclear_criteria = kwargs.get('unclear_criteria', [])
-        patient_data = kwargs.get('patient_data', {})
-        trial_data = kwargs.get('trial_data', {}) # Includes 'official_title', 'nct_id', etc.
-        trial_id = trial_data.get('nct_id', 'N/A')
-
-        logging.info(f"[{self.name}:{trial_id}] Starting deep dive analysis for trial '{trial_data.get('official_title', trial_id)}'.")
-        logging.info(f"[{self.name}:{trial_id}] Criteria: {len(unmet_criteria)} unmet, {len(unclear_criteria)} unclear.")
+        trial_id = trial_data.get("nct_id", "UNKNOWN_TRIAL") # Get trial_id for logging
+        logging.info(f"[{self.name}:{trial_id}] Starting deep dive. Unmet: {len(unmet_criteria)}, Unclear: {len(unclear_criteria)} criteria.")
 
         if not self.llm_client:
             logging.error(f"[{self.name}:{trial_id}] LLM client not initialized. Cannot perform deep dive.")
+            # Return a structure indicating an error, perhaps mirroring the expected success output
             return {
-                "summary": "Deep dive skipped: LLM client not available.",
-                "clarified_items": [],
-                "remaining_gaps": unmet_criteria + unclear_criteria, # Return all as gaps
-                "refined_next_steps": ["Initialize LLM client correctly."]
+                "trial_id": trial_id,
+                "summary": "Deep dive could not be performed due to LLM initialization error.",
+                "analyzed_criteria": [],
+                "remaining_gaps": [], # No gaps identified if agent can't run
+                "strategic_next_steps": [],
+                "error": "LLM client not initialized"
             }
 
-        # Prepare patient data string once
-        # Select relevant patient data fields to include in the prompt
-        relevant_patient_data = {
-            "profile": patient_data.get("profile"),
-            "conditions": patient_data.get("conditions"),
-            "medications": patient_data.get("medications"),
-            "allergies": patient_data.get("allergies"),
-            "recent_labs": patient_data.get("recent_labs"), # Assuming labs are available
-            # Add other potentially relevant sections like 'procedures', 'social_history' if needed
+        # --- Prepare Patient Data Snippet (Same as before) ---
+        # This snippet is passed to the LLM for each criterion.
+        # For now, it includes key sections. Could be made more dynamic.
+        patient_data_snippet = {
+            "patientId": patient_data.get("patientId"),
+            "diagnosis": patient_data.get("diagnosis"),
+            "medicalHistory": patient_data.get("medicalHistory", [])[:5], # Limit for brevity
+            "currentMedications": patient_data.get("currentMedications", [])[:5],
+            "allergies": patient_data.get("allergies", []), # ADDED allergies
+            "recentLabs": patient_data.get("recentLabs", [])[:3], # Limit recent labs
+            "notes": [note.get("text") for note in patient_data.get("notes", [])[:2]], # Only text of first 2 notes
+            # NEW: Include mutations if available
+            "mutations": patient_data.get("mutations", []) # Include all mutations for this patient
         }
-        try:
-            patient_data_str = json.dumps(relevant_patient_data, indent=2)
-        except TypeError as e:
-            logging.error(f"[{self.name}:{trial_id}] Could not serialize patient data to JSON: {e}")
-            patient_data_str = '{"error": "Could not serialize patient data"}'
+        # Remove empty sections from the snippet to keep the prompt clean
+        patient_data_snippet = {k: v for k, v in patient_data_snippet.items() if v}
+        # --- End Snippet Prep ---
 
-        # --- Prepare analysis tasks ---
-        tasks = []
-        all_criteria_to_analyze = [
-            (crit, 'unmet') for crit in unmet_criteria
-        ] + [
-            (crit, 'unclear') for crit in unclear_criteria
-        ]
-
-        if not all_criteria_to_analyze:
-             logging.info(f"[{self.name}:{trial_id}] No unmet or unclear criteria to analyze.")
-             return {
-                "summary": "No unmet or unclear criteria provided for deep dive.",
-                "clarified_items": [],
-                "remaining_gaps": [],
-                "refined_next_steps": []
-            }
-
-        for criterion_data, crit_type in all_criteria_to_analyze:
-            # Create an awaitable task for each criterion analysis
-            # --- FIX: Extract the criterion text string --- 
-            criterion_text = criterion_data.get('criterion', 'Missing criterion text') 
-            if not isinstance(criterion_text, str):
-                logging.warning(f"[{self.name}:{trial_id}] Invalid criterion format found: {criterion_data}. Skipping.")
-                continue # Skip this invalid criterion
-                
-            tasks.append(
-                self._analyze_single_criterion_async(
-                    criterion=criterion_text, # Pass the extracted text string
-                    patient_data=patient_data,
-                    trial_id=trial_id
-                )
-            )
-
-        # --- Run analysis tasks concurrently ---
-        logging.info(f"[{self.name}:{trial_id}] Running analysis for {len(tasks)} criteria concurrently...")
-        analysis_results = await asyncio.gather(*tasks, return_exceptions=True)
-        logging.info(f"[{self.name}:{trial_id}] Concurrent analysis finished.")
-
-        # --- Process results ---
-        clarified_items = []
-        remaining_gaps = []
-
-        for result in analysis_results:
-            if isinstance(result, Exception):
-                logging.error(f"[{self.name}:{trial_id}] An analysis task failed: {result}", exc_info=result)
-                # Add to remaining gaps with error status
-                remaining_gaps.append({
-                    "criterion": "Analysis Task Failed",
-                    "original_reasoning": "N/A", # No original reasoning for a failed task
-                    "deep_dive_status": "ERROR_TASK_FAILED",
-                    "deep_dive_evidence": f"Error during concurrent execution: {result}",
-                    "original_type": "error",
-                    "analysis_source": "System Error" # Source is system error
-                })
-                continue
-
-            # Extract data from the result dictionary returned by _analyze_single_criterion_async
-            criterion_text = result.get('criterion', 'Unknown Criterion')
-            status = result.get('status', 'ERROR_PROCESSING_FAILED')
-            evidence = result.get('evidence', 'No evidence processed.')
-            analysis_source = result.get('analysis_source', 'Unknown Source') # <-- Get the analysis source
-            
-            # Find the original criterion object to get its original reasoning and type
-            original_criterion_data = None
-            original_type = 'unknown'
-            for crit_data, crit_type in all_criteria_to_analyze:
-                 if crit_data.get('criterion') == criterion_text: # Match based on criterion text
-                      original_criterion_data = crit_data
-                      original_type = crit_type
-                      break 
-            
-            original_reasoning = original_criterion_data.get('reasoning', 'N/A') if original_criterion_data else 'Original criterion not found'
-
-            # Construct the final item for the report
-            item = {
-                "criterion": criterion_text,
-                "original_reasoning": original_reasoning,
-                "deep_dive_status": status,
-                "deep_dive_evidence": evidence,
-                "original_type": original_type,
-                "analysis_source": analysis_source # <-- Include analysis_source here
-            }
-
-            # Append to the correct list based on the deep dive status
-            if status in ["MET", "NOT_MET", "CONFLICT_FOUND"]:
-                clarified_items.append(item)
-                logging.debug(f"[{self.name}:{trial_id}] Clarified (Source: {analysis_source}): '{criterion_text[:50]}...' -> {status}")
-            else: # UNCLEAR or any ERROR status from the deep dive call
-                remaining_gaps.append(item)
-                logging.debug(f"[{self.name}:{trial_id}] Remains Gap/Unclear (Source: {analysis_source}): '{criterion_text[:50]}...' -> {status}")
+        all_criteria_to_analyze = unmet_criteria + unclear_criteria
+        analyzed_results = []
         
+        if not all_criteria_to_analyze:
+            logging.info(f"[{self.name}:{trial_id}] No criteria provided for deep dive.")
+            return {
+                "trial_id": trial_id,
+                "summary": "No criteria were submitted for deep dive analysis.",
+                "analyzed_criteria": [],
+                "remaining_gaps": [],
+                "strategic_next_steps": []
+            }
 
-        # --- Generate Summary (Keep as is) ---
-        summary = (
-            f"Deep dive analysis complete for {len(all_criteria_to_analyze)} criteria. "
-            f"{len(clarified_items)} items clarified, {len(remaining_gaps)} gaps remain."
-        )
-        logging.info(f"[{self.name}:{trial_id}] {summary}")
-
-        # --- NEW: Perform Internal Data Search for Remaining Gaps ---
-        internal_search_findings = []
-        if remaining_gaps and patient_data.get('notes'):
-            logging.info(f"[{self.name}:{trial_id}] Performing internal search within patient notes for {len(remaining_gaps)} remaining gaps...")
-            notes_content = patient_data.get('notes', [])
+        # --- Create tasks for concurrent execution (Same as before) ---
+        tasks = []
+        for item in all_criteria_to_analyze:
+            criterion_text = item.get("criterion")
+            # Default to "No original reasoning provided." if the key is missing or value is None/empty
+            original_reasoning_text = item.get("reasoning") or "No original reasoning provided."
             
-            gaps_to_search = list(remaining_gaps) # Create a copy to iterate over
-            
-            for gap in gaps_to_search:
-                criterion_text_lower = gap.get('criterion', '').lower()
-                search_performed = False
-                findings_for_criterion = []
-
-                # Example: Search for ECOG / Performance Status
-                if "ecog" in criterion_text_lower or "performance status" in criterion_text_lower:
-                    search_performed = True
-                    keywords = ['ecog', 'performance status', 'ambulatory', 'bedridden', ' KPS ', ' Karnofsky'] # Added KPS
-                    # Simple case-insensitive keyword search in notes
-                    for note in notes_content:
-                        note_text = note.get('text', '')
-                        note_text_lower = note_text.lower()
-                        note_date = note.get('date', 'Unknown Date')
-                        provider = note.get('provider', 'Unknown Provider')
-                        
-                        # Find sentences containing keywords
-                        sentences = re.split(r'[.!?]\s+', note_text) # Split into sentences
-                        for sentence in sentences:
-                            sentence_lower = sentence.lower()
-                            for keyword in keywords:
-                                if keyword in sentence_lower:
-                                    findings_for_criterion.append({
-                                        "source": f"Note ({note_date} by {provider})",
-                                        "match": keyword,
-                                        "context": sentence.strip()
-                                    })
-                                    break # Move to next sentence once a keyword is found in this one
-                                    
-                # NEW: Search for common Lab mentions
-                elif any(lab_keyword in criterion_text_lower for lab_keyword in 
-                         ["platelet", "hemoglobin", "bilirubin", "creatinine", 
-                          "neutrophil", "ast", "sgot", "alt", "sgpt"]):
-                    search_performed = True
-                    # Define keywords for different labs
-                    lab_keywords = {
-                        "platelet": ["platelet", "plt", "thrombocytopenia", "thrombocytosis"],
-                        "hemoglobin": ["hemoglobin", "hgb", "anemia"],
-                        "bilirubin": ["bilirubin", "bili", "jaundice"],
-                        "creatinine": ["creatinine", "crcl", "creat", "renal function"],
-                        "neutrophil": ["neutrophil", "anc", "neutropenia"],
-                        "ast_alt": ["ast", "sgot", "alt", "sgpt", "liver enzymes", "lft", "hepatic function"]
-                    }
-                    
-                    # Determine which lab group this criterion likely relates to
-                    relevant_lab_group = None
-                    if any(kw in criterion_text_lower for kw in lab_keywords["platelet"]): relevant_lab_group = "platelet"
-                    elif any(kw in criterion_text_lower for kw in lab_keywords["hemoglobin"]): relevant_lab_group = "hemoglobin"
-                    elif any(kw in criterion_text_lower for kw in lab_keywords["bilirubin"]): relevant_lab_group = "bilirubin"
-                    elif any(kw in criterion_text_lower for kw in lab_keywords["creatinine"]): relevant_lab_group = "creatinine"
-                    elif any(kw in criterion_text_lower for kw in lab_keywords["neutrophil"]): relevant_lab_group = "neutrophil"
-                    elif any(kw in criterion_text_lower for kw in lab_keywords["ast_alt"]): relevant_lab_group = "ast_alt"
-                    
-                    if relevant_lab_group:
-                        keywords_to_search = lab_keywords[relevant_lab_group]
-                        for note in notes_content:
-                            note_text = note.get('text', '')
-                            note_text_lower = note_text.lower()
-                            note_date = note.get('date', 'Unknown Date')
-                            provider = note.get('provider', 'Unknown Provider')
-                            
-                            sentences = re.split(r'[.!?]\s+', note_text) 
-                            for sentence in sentences:
-                                sentence_lower = sentence.lower()
-                                for keyword in keywords_to_search:
-                                    if keyword in sentence_lower:
-                                        # Look for potential numeric values near the keyword
-                                        numeric_context = re.findall(r"[-+]?\d*\.?\d+", sentence) 
-                                        findings_for_criterion.append({
-                                            "source": f"Note ({note_date} by {provider})",
-                                            "match": keyword,
-                                            "context": sentence.strip(),
-                                            "numeric_values_in_sentence": numeric_context # Add potential values
-                                        })
-                                        break # Move to next sentence
-                    else:
-                         logging.warning(f"[{self.name}:{trial_id}] Lab criterion matched but couldn't assign to specific group: {criterion_text_lower}")
-
-                # TODO: Add more search logic for other common gaps (e.g., specific medications, conditions)
-
-                if search_performed and findings_for_criterion:
-                     internal_search_findings.append({
-                         "criterion": gap.get('criterion'),
-                         "findings": findings_for_criterion
-                     })
-                     logging.debug(f"[{self.name}:{trial_id}] Internal search found potential context for criterion: '{gap.get('criterion')[:50]}...'")
-                elif search_performed:
-                     # Optionally log that search was done but nothing found
-                     logging.debug(f"[{self.name}:{trial_id}] Internal search performed but found no context for criterion: '{gap.get('criterion')[:50]}...'")
-                     internal_search_findings.append({
-                         "criterion": gap.get('criterion'),
-                         "findings": "No relevant mentions found in notes."
-                     })
-
-        # --- End Internal Data Search ---
-
-        # --- Generate Refined Next Steps using LLM --- 
-        refined_next_steps = [] # Default empty list
-        if remaining_gaps and self.llm_client:
-            # --- Modify Prompt Context for Next Steps --- 
-            # Add internal search results to the context for the next steps LLM call (Task 5.1.3)
-            logging.info(f"[{self.name}:{trial_id}] Generating refined next steps based on {len(remaining_gaps)} remaining gaps (considering internal search results)...")
+            if criterion_text:
+                tasks.append(self._analyze_single_criterion_async(
+                    criterion=criterion_text,
+                    original_reasoning=original_reasoning_text, # Pass the extracted reasoning
+                    patient_data=patient_data_snippet, 
+                    trial_id=trial_id
+                ))
+            else:
+                logging.warning(f"[{self.name}:{trial_id}] Found item without 'criterion' text: {item}")
+        # --- End Task Creation ---
+        
+        # --- Execute tasks and process results (Same as before) ---
+        if tasks:
             try:
-                gaps_context = []
-                for gap in remaining_gaps:
-                    # Find corresponding internal search findings, if any
-                    search_outcome = "Internal search not applicable or not performed."
-                    for finding in internal_search_findings:
-                        if finding['criterion'] == gap.get('criterion'):
-                            search_outcome = finding['findings']
-                            break
-                            
-                    gaps_context.append({
-                        "criterion": gap.get('criterion'),
-                        "reason_unresolved": gap.get('deep_dive_evidence', 'Reason unclear'),
-                        "original_type": gap.get('original_type'),
-                        "internal_search_outcome": search_outcome # Pass search results
-                    })
-                
-                next_steps_prompt = f"""
-                Context: You are assisting a clinical research coordinator responsible for screening patients for clinical trials. A deep dive analysis using patient data was performed for specific eligibility criteria that were initially marked as unmet or unclear. An internal search within patient notes was also attempted for some criteria. The following criteria remain unresolved gaps, along with the reasons and any relevant findings from the internal note search:
+                loop = asyncio.get_event_loop()
+                # If running in a context where a loop is already running (e.g. FastAPI),
+                # just await asyncio.gather. Otherwise, use loop.run_until_complete.
+                # For FastAPI, direct await is usually fine.
+                raw_llm_results = await asyncio.gather(*tasks)
+                analyzed_results = [res for res in raw_llm_results if res] # Filter out None results if any
+            except Exception as e:
+                logging.error(f"[{self.name}:{trial_id}] Error during concurrent LLM calls: {e}", exc_info=True)
+                # Populate analyzed_results with error state for each original criterion
+                analyzed_results = [
+                    {"criterion": item.get("criterion"), "status": "ERROR", "evidence": f"LLM analysis failed: {e}", "analysis_source": "System Error"}
+                    for item in all_criteria_to_analyze
+                ]
+        # --- End Execution ---
 
-                Remaining Gaps & Internal Search Outcomes:
+        # --- Task 5.1.2: Internal Data Search Logic --- 
+        internal_search_findings = {}
+        processed_gap_indices = set() # To avoid searching the same gap multiple times if criteria overlap targets
+        logging.info(f"[{self.name}:{trial_id}] Starting internal data search for {len(analyzed_results)} analyzed criteria...")
+
+        for i, result in enumerate(analyzed_results):
+            if i in processed_gap_indices:
+                continue
+                
+            criterion_text = result.get("criterion")
+            if not criterion_text or not isinstance(criterion_text, str):
+                continue # Skip if no valid criterion text
+                
+            findings_for_this_criterion = []
+            target_matched = None
+
+            for target in SEARCH_TARGETS:
+                match_found = False
+                captured_value = None
+                try:
+                    patterns = target.get("criterion_patterns", [])
+                    if not patterns: continue
+                    
+                    # Combine patterns into a single regex for matching this target
+                    # Ensure patterns are strings before joining
+                    string_patterns = [p for p in patterns if isinstance(p, str)]
+                    if not string_patterns: continue
+                    target_regex = re.compile(r"|".join(string_patterns), re.IGNORECASE)
+                    
+                    match = target_regex.search(criterion_text)
+                    if match:
+                        match_found = True
+                        target_matched = target # Store the matched target config
+                        target_id = target.get("id", "UNKNOWN") # Evaluate outside f-string
+                        capture_group_index = target.get("capture_group")
+                        if capture_group_index is not None and len(match.groups()) >= capture_group_index:
+                            captured_value = match.group(capture_group_index)
+                            logging.debug(f"[{self.name}:{trial_id}] Criterion '{criterion_text[:50]}...' matched target '{target_id}'. Captured: '{captured_value}'")
+                        else:
+                            logging.debug(f"[{self.name}:{trial_id}] Criterion '{criterion_text[:50]}...' matched target '{target_id}'. No capture group needed/found.")
+                            
+                except re.error as re_err:
+                    target_id_err = target.get('id', 'UNKNOWN') # Evaluate outside f-string
+                    logging.error(f"[{self.name}:{trial_id}] Invalid regex in target '{target_id_err}': {patterns}. Error: {re_err}")
+                    continue # Skip this target if regex fails
+                except Exception as e:
+                    target_id_ex = target.get('id', 'UNKNOWN') # Evaluate outside f-string
+                    logging.error(f"[{self.name}:{trial_id}] Error matching criterion to target '{target_id_ex}': {e}")
+                    continue
+
+                if match_found and target_matched:
+                    # Perform the search based on target config
+                    search_type = target_matched.get("search_type")
+                    search_fields = target_matched.get("search_fields", [])
+                    search_findings_for_target = []
+
+                    for field_name in search_fields:
+                        field_data = patient_data.get(field_name) # Use the FULL patient_data here
+                        if field_data is None: 
+                            target_id_nf = target_matched.get("id", "UNKNOWN") # Evaluate outside f-string
+                            logging.debug(f"[{self.name}:{trial_id}] Search field '{field_name}' not found in patient data for target '{target_id_nf}'")
+                            continue # Skip if the necessary field doesn't exist in patient_data
+                        
+                        try:
+                            if search_type == "lab_component":
+                                lab_keywords = target_matched.get("lab_test_keywords", [])
+                                search_findings_for_target.extend(self._search_lab_component(field_data, lab_keywords))
+                            elif search_type == "keyword_sentence":
+                                keywords = target_matched.get("keywords", [])
+                                search_findings_for_target.extend(self._search_keyword_sentence(field_data, keywords))
+                            elif search_type == "mutation_lookup":
+                                gene_symbol_to_find = captured_value # Use the captured gene symbol
+                                if gene_symbol_to_find:
+                                     search_findings_for_target.extend(self._search_mutation_list(field_data, gene_symbol_to_find))
+                                else:
+                                    target_id_unk = target_matched.get("id", "UNKNOWN") # Evaluate outside f-string
+                                    logging.warning(f"[{self.name}:{trial_id}] Mutation lookup target matched for criterion '{criterion_text[:50]}...' but no gene symbol was captured.")
+                            elif search_type == "medication_check":
+                                known_list = target_matched.get("known_list", [])
+                                search_findings_for_target.extend(self._search_medication_check(field_data, known_list))
+                            else:
+                                target_id_unk = target_matched.get("id", "UNKNOWN") # Evaluate outside f-string
+                                logging.warning(f"[{self.name}:{trial_id}] Unknown search_type '{search_type}' for target '{target_id_unk}'")
+                        except Exception as search_ex:
+                            target_id_s_err = target_matched.get("id", "UNKNOWN") # Evaluate outside f-string
+                            logging.error(f"[{self.name}:{trial_id}] Error during internal search type '{search_type}' for target '{target_id_s_err}': {search_ex}", exc_info=True)
+                    
+                    if search_findings_for_target:
+                        findings_for_this_criterion.extend(search_findings_for_target)
+                        
+                    # Mark this criterion as processed by this target and break from target loop
+                    processed_gap_indices.add(i)
+                    break 
+            
+            # Store findings associated with the criterion text
+            if findings_for_this_criterion:
+                internal_search_findings[criterion_text] = findings_for_this_criterion
+                logging.info(f"[{self.name}:{trial_id}] Internal search found {len(findings_for_this_criterion)} potential context items for criterion: '{criterion_text[:50]}...'")
+            elif target_matched: # Search was performed but nothing found
+                 internal_search_findings[criterion_text] = [] # Indicate search happened but found nothing
+                 target_id_nf2 = target_matched.get("id", "UNKNOWN") # Evaluate outside f-string
+                 logging.info(f"[{self.name}:{trial_id}] Internal search performed for criterion '{criterion_text[:50]}...' based on target '{target_id_nf2}', but found no specific context.")
+                 
+        logging.info(f"[{self.name}:{trial_id}] Internal search completed for {len(processed_gap_indices)} unique criteria.")
+        # --- End Task 5.1.2 --- 
+
+        # --- Post-Analysis: Combine results and findings ---
+        clarified_items = []
+        remaining_gaps = [] # Items still UNCLEAR or now NOT_MET based on deep dive
+        
+        for result in analyzed_results:
+            criterion_text = result.get("criterion")
+            # Attach internal search results to the result object for easier processing later
+            result["internal_search_findings"] = internal_search_findings.get(criterion_text) # Will be None if search wasn't applicable/run
+            
+            if result.get("status") == "MET":
+                clarified_items.append(result)
+            else: # NOT_MET, UNCLEAR, or ERROR from deep dive
+                remaining_gaps.append(result)
+        # --- End Post-Analysis Combination ---
+
+        # --- Generate Summary (Can be enhanced later) ---
+        summary_text = f"Deep dive completed for {len(analyzed_results)} criteria. "
+        summary_text += f"{len(clarified_items)} criteria were potentially clarified as MET. "
+        summary_text += f"{len(remaining_gaps)} criteria remain as NOT_MET, UNCLEAR, or encountered errors."
+        # --- End Summary --- 
+
+        # --- Task 5.1.4: Generate Strategic Next Steps ---
+        strategic_next_steps = []
+        if remaining_gaps and self.llm_client:
+            logging.info(f"[{self.name}:{trial_id}] Generating strategic next steps based on {len(remaining_gaps)} remaining gaps and internal search results...")
+            try:
+                # Prepare context for the prompt, including internal search outcomes
+                prompt_context_gaps = []
+                for gap in remaining_gaps:
+                    criterion_text = gap.get("criterion")
+                    # Access findings attached earlier during post-analysis combination
+                    findings = gap.get("internal_search_findings")
+                    search_outcome = "Not Searched Internally"
+                    if findings is not None: # Search was attempted
+                        search_outcome = f"Internal Search Found {len(findings)} item(s)" if findings else "Internal Search Found Nothing"
+
+                    prompt_context_gaps.append({
+                        "criterion": criterion_text,
+                        "status_after_llm_dive": gap.get("status"),
+                        "reason_unresolved": gap.get("evidence"),
+                        "internal_search_outcome": search_outcome,
+                        # Optionally include a snippet of findings if present and not too long
+                        "internal_finding_snippet": findings[0].get("context") if findings else None
+                    })
+
+                # Construct the refined prompt
+                next_steps_prompt = f"""
+                Context: You are an expert clinical research coordinator AI assistant. A deep dive analysis was performed on clinical trial eligibility criteria. Some criteria remain unresolved (NOT_MET, UNCLEAR, or ERROR). An internal search within available patient data (labs, notes, mutations) was also performed for some criteria.
+
+                Remaining Unresolved Criteria & Internal Search Outcomes:
                 ```json
-                {json.dumps(gaps_context, indent=2)}
+                {json.dumps(prompt_context_gaps, indent=2)}
                 ```
 
-                Task: Based *only* on the unresolved gaps listed above and the outcomes of the internal search, suggest a list of concrete, actionable next steps for the coordinator to take to gather the necessary information or resolve the ambiguity. Focus on specific actions.
-                **Prioritize actions based on the `internal_search_outcome`:**
-                - If `internal_search_outcome` contains specific findings (a list of objects), the primary suggestion should usually be `REVIEW_CHART_SECTION` pointing to the specific source mentioned in the findings.
-                - If `internal_search_outcome` indicates a search was performed but found nothing ('No relevant mentions found...'), suggest the most direct external action (e.g., `ORDER_LABS`, `SCHEDULE_ASSESSMENT`).
-                - If `internal_search_outcome` indicates the search wasn't applicable or performed, suggest standard actions.
-                - Combine actions where sensible (e.g., one `ORDER_LABS` action for multiple missing labs).
+                Task: Generate a **prioritized and concise list (max 5-7 actions)** of the MOST IMPORTANT concrete next steps to resolve the remaining ambiguities. Focus on actions that address critical eligibility factors first (like key labs, performance status, major exclusions, core genomic tests, measurable disease).
 
-                Desired Output Format:
-                Provide the output as a JSON list of objects. Each object should represent a single action and have the following keys:
-                - "action_type": (String) A category like "ORDER_LABS", "REVIEW_CHART_SECTION", "CLARIFY_WITH_PATIENT", "SCHEDULE_ASSESSMENT", "CONSULT_SPECIALIST", "VERIFY_MEDICATION", "OTHER".
-                - "description": (String) A concise description of the recommended action (e.g., "Review note from 2024-07-28 for ECOG context").
-                - "rationale": (String) Briefly explain why this action addresses one or more specific gaps, considering the internal search results (e.g., "Addresses missing ECOG status. Internal search found potential mention in note XYZ.").
-                - "details": (Optional[String]) Provide specific details if applicable (e.g., specific lab names, note date/provider, specific question for patient).
+                Instructions:
+                - **Prioritize:** Address gaps related to critical factors first.
+                - **Be Specific:** Suggest concrete actions (ORDER_LABS [specify], SCHEDULE_ASSESSMENT [specify], REVIEW_INTERNAL_FINDING [point to source/context], CLARIFY_WITH_PATIENT [specific topic], VERIFY_MEDICATION [specific class], CHECK_EXTERNAL_RECORD [specify system/source], OTHER [specify]).
+                - **Use Internal Findings:** If `internal_search_outcome` indicates items were found, the primary action should be `REVIEW_INTERNAL_FINDING`. Include the `internal_finding_snippet` in the rationale or details if provided.
+                - **Target External Gaps:** If `internal_search_outcome` is "Internal Search Found Nothing" or "Not Searched Internally", suggest the most direct *external* action needed (e.g., ORDER_LABS, SCHEDULE_ASSESSMENT, CHECK_EXTERNAL_RECORD).
+                - **Combine Actions:** Group similar actions (e.g., order multiple labs in one step).
+                - **Limit Quantity:** Provide NO MORE than 7 distinct action items in total, focusing on the highest impact steps.
+                - **Output Format:** Respond ONLY with a valid JSON list of objects. Each object must have keys: "action_type" (String), "description" (String), "rationale" (String), "details" (Optional[String]).
 
-                Example Action Object:
-                {{
-                    "action_type": "ORDER_LABS",
-                    "description": "Order Complete Blood Count (CBC) and Comprehensive Metabolic Panel (CMP)",
-                    "rationale": "Required to address missing Absolute Neutrophil Count, Hemoglobin, Platelets, Bilirubin, AST/ALT, and Creatinine.",
-                    "details": "CBC, CMP"
-                }}
-                
-                Example Action Object 2:
-                {{
-                    "action_type": "SCHEDULE_ASSESSMENT",
-                    "description": "Schedule formal ECOG Performance Status assessment",
-                    "rationale": "Required to address missing Performance Status criterion.",
-                    "details": null
-                }}
+                Example Action Object (Internal Finding):
+                {{ "action_type": "REVIEW_INTERNAL_FINDING", "description": "Review ECOG mention in recent Oncology note", "rationale": "Addresses critical Performance Status gap. Internal search found potential context.", "details": "Finding: 'Patient presents... ECOG 1 today.'" }}
 
-                Generate the JSON list of action objects now based on the provided Remaining Gaps & Internal Search Outcomes:
+                Example Action Object (External Needed):
+                {{ "action_type": "ORDER_LABS", "description": "Order CBC w/ Diff & CMP", "rationale": "Addresses critical gaps in ANC, Platelets, Hemoglobin, etc. Internal search found no recent values.", "details": "CBC with differential, Comprehensive Metabolic Panel" }}
+
+                Generate the prioritized JSON list (max 7 items) now:
                 ```json
                 [
                     // Generate JSON objects here
                 ]
                 ```
                 """
-                
-                # Make the LLM call for next steps
-                next_steps_response = await asyncio.to_thread(
-                    self.llm_client.generate_content,
+
+                # --- Make LLM call (using existing safe extraction logic) ---
+                logging.debug(f"[{self.name}:{trial_id}] Sending refined prompt to LLM for strategic next steps...")
+                # Assume generate_content_async is preferred/available
+                next_steps_response = await self.llm_client.generate_content_async(
                     next_steps_prompt,
-                    generation_config=DEFAULT_LLM_GENERATION_CONFIG, # Consider adjusting temp/config if needed
+                    generation_config=DEFAULT_LLM_GENERATION_CONFIG,
                     safety_settings=SAFETY_SETTINGS
                 )
-                
-                # Extract and parse the JSON response for next steps
+
                 raw_next_steps_text = ""
-                # Use similar safe text extraction logic as before
                 try:
+                    # Standard way to get text from Gemini response
                     if next_steps_response.parts:
                         raw_next_steps_text = next_steps_response.parts[0].text
                     elif hasattr(next_steps_response, 'text'):
-                        raw_next_steps_text = next_steps_response.text
-                    else: 
-                        raw_next_steps_text = "Error: LLM response structure invalid or missing text."
-                        logging.warning(f"[{self.name}:{trial_id}] Next steps LLM response structure unexpected: {next_steps_response}")
-                except Exception as text_ex:
-                    logging.error(f"[{self.name}:{trial_id}] Error extracting text from next steps LLM response: {text_ex}", exc_info=True)
-                    raw_next_steps_text = f"Error extracting text: {text_ex}"
-
-                logging.debug(f"[{self.name}:{trial_id}] Raw next steps response: {raw_next_steps_text}")
-                
-                # Attempt to parse the JSON list from the response
-                try:
-                    # Find the JSON list within the response (handling potential markdown backticks)
-                    json_match = re.search(r"```json\s*(\[.*?\])\s*```", raw_next_steps_text, re.DOTALL)
-                    if json_match:
-                        json_string = json_match.group(1)
-                        refined_next_steps = json.loads(json_string)
-                        logging.info(f"[{self.name}:{trial_id}] Successfully parsed {len(refined_next_steps)} refined next steps from LLM JSON block.")
+                         raw_next_steps_text = next_steps_response.text # Fallback for simpler text responses
                     else:
-                        # Fallback: Try parsing the whole text if no markdown found (less reliable)
-                        logging.warning(f"[{self.name}:{trial_id}] No JSON block found in next steps response. Attempting to parse entire response.")
-                        try:
-                            # Pre-process: Remove potential leading/trailing non-JSON content before parsing
-                            potential_json_start = raw_next_steps_text.find('[')
-                            potential_json_end = raw_next_steps_text.rfind(']')
-                            if potential_json_start != -1 and potential_json_end != -1 and potential_json_start < potential_json_end:
-                                json_string_fallback = raw_next_steps_text[potential_json_start:potential_json_end+1]
-                                refined_next_steps = json.loads(json_string_fallback)
-                                if not isinstance(refined_next_steps, list):
-                                    raise ValueError("Fallback parsed result is not a list")
-                                logging.info(f"[{self.name}:{trial_id}] Successfully parsed {len(refined_next_steps)} refined next steps from raw LLM text (fallback).")
-                            else:
-                                raise json.JSONDecodeError("Could not reliably find JSON list boundaries", raw_next_steps_text, 0)
-                        except json.JSONDecodeError as fallback_err:
-                           logging.warning(f"[{self.name}:{trial_id}] Fallback JSON parsing failed for refined next steps. Error: {fallback_err}. Raw text: {raw_next_steps_text}")
-                           refined_next_steps = [{"action_type": "ERROR", "description": "Failed to parse strategic actions from LLM.", "rationale": raw_next_steps_text, "details": None}]
+                        logging.warning(f"[{self.name}:{trial_id}] Next steps LLM Response structure unexpected or no text content found. Blocked? Resp: {next_steps_response}")
+                        raw_next_steps_text = "Error: LLM response structure invalid or missing text."
+                except AttributeError:
+                     logging.warning(f"[{self.name}:{trial_id}] Next steps LLM Response object missing .text/.parts attribute. Blocked? Resp: {next_steps_response}")
+                     raw_next_steps_text = "Error: LLM response blocked or attribute missing."
+                except Exception as text_ex:
+                     logging.error(f"[{self.name}:{trial_id}] Error extracting text from next steps LLM response: {text_ex}", exc_info=True)
+                     raw_next_steps_text = f"Error extracting text: {text_ex}"
+
+                logging.debug(f"[{self.name}:{trial_id}] Raw next steps response: {raw_next_steps_text[:500]}...")
+
+                # --- Parse JSON response (using existing safe parsing logic) ---
+                try:
+                    raw_next_steps_text = raw_next_steps_text.strip() # Strip raw text first
+                    logging.debug(f"[{self.name}:{trial_id}] Raw next steps response (stripped, first 600 chars): {raw_next_steps_text[:600]}")
+
+                    json_string = None
+                    # Try to extract from markdown block first
+                    if raw_next_steps_text.startswith("```json") and raw_next_steps_text.endswith("```"):
+                        json_string = raw_next_steps_text[len("```json"): -len("```")].strip()
+                        logging.info(f"[{self.name}:{trial_id}] Extracted from markdown block by start/end check.")
+                    else:
+                        # Fallback regex if start/end check fails (e.g. extra text after closing ```)
+                        match = re.search(r"```json\\s*(.*?)\\s*```", raw_next_steps_text, re.DOTALL)
+                        if match:
+                            json_string = match.group(1).strip()
+                            logging.info(f"[{self.name}:{trial_id}] Extracted from markdown block by regex.")
+                        else:
+                            # If no markdown, assume the whole string might be JSON (e.g., LLM forgot markdown)
+                            logging.warning(f"[{self.name}:{trial_id}] No JSON markdown block detected. Assuming raw response is JSON.")
+                            json_string = raw_next_steps_text # Already stripped
+
+                    if not json_string:
+                        logging.error(f"[{self.name}:{trial_id}] JSON string for next steps is empty after extraction attempts. Raw text: {raw_next_steps_text[:500]}")
+                        raise json.JSONDecodeError("Extracted JSON string is empty", raw_next_steps_text, 0)
+
+                    logging.info(f"[{self.name}:{trial_id}] Attempting to parse for next steps (first 500 chars): '''{json_string[:500]}...'''")
+                    strategic_next_steps = json.loads(json_string)
+
+                    if not isinstance(strategic_next_steps, list):
+                        logging.error(f"[{self.name}:{trial_id}] Parsed JSON for next steps is not a list. Type: {type(strategic_next_steps)}. Content: {json_string[:200]}")
+                        raise json.JSONDecodeError("Parsed JSON is not a list as expected by prompt", json_string, 0)
+
+                    logging.info(f"[{self.name}:{trial_id}] Successfully parsed {len(strategic_next_steps)} strategic next steps.")
 
                 except json.JSONDecodeError as json_err:
-                    logging.error(f"[{self.name}:{trial_id}] Failed to parse JSON for refined next steps: {json_err}. Raw text: {raw_next_steps_text}", exc_info=True)
-                    refined_next_steps = [{"action_type": "ERROR", "description": "Failed to parse strategic actions from LLM.", "rationale": raw_next_steps_text, "details": None}]
+                    problematic_string = json_string if 'json_string' in locals() and json_string is not None else raw_next_steps_text
+                    logging.error(f"[{self.name}:{trial_id}] Failed to parse JSON for strategic next steps: {json_err}. String attempted (first 500 chars): '{problematic_string[:500]}'")
+                    strategic_next_steps = [{"action_type": "ERROR", "description": "Failed to parse next steps from LLM.", "rationale": f"JSON Error: {json_err}", "details": raw_next_steps_text[:500]}]
                 
             except Exception as next_step_ex:
-                logging.error(f"[{self.name}:{trial_id}] Error generating refined next steps: {next_step_ex}", exc_info=True)
-                refined_next_steps = [{"action_type": "ERROR", "description": "Failed to generate strategic actions.", "rationale": str(next_step_ex), "details": None}]
-                
+                logging.error(f"[{self.name}:{trial_id}] Error generating strategic next steps: {next_step_ex}", exc_info=True)
+                strategic_next_steps = [{"action_type": "ERROR", "description": "Failed to generate strategic actions.", "rationale": str(next_step_ex), "details": None}]
+
         elif not remaining_gaps:
-            logging.info(f"[{self.name}:{trial_id}] No remaining gaps, setting default 'all clear' next step.")
-            refined_next_steps = [{"action_type": "INFO", "description": "All initially unmet/unclear criteria were clarified by the deep dive.", "rationale": "No further action needed based on deep dive.", "details": None}]
+             strategic_next_steps = [{"action_type": "INFO", "description": "All initially unmet/unclear criteria were clarified.", "rationale": "No further action needed based on deep dive.", "details": None}]
         else: # LLM client not available
-             logging.warning(f"[{self.name}:{trial_id}] LLM client not available, cannot generate refined next steps.")
-             refined_next_steps = [{"action_type": "ERROR", "description": "LLM client needed to generate strategic actions.", "rationale": "LLM client was not initialized.", "details": None}]
-        # --- End Refined Next Steps Generation --- 
+             strategic_next_steps = [{"action_type": "ERROR", "description": "LLM client needed to generate strategic actions.", "rationale": "LLM client not initialized.", "details": None}]
+        # --- End Task 5.1.4 ---
 
-        # --- Construct Final Report ---
-        report = {
-            "summary": summary,
-            "clarified_items": clarified_items,
-            "internal_search_findings": internal_search_findings,
-            "remaining_gaps": remaining_gaps,
-            "refined_next_steps": refined_next_steps
-        }
+        logging.info(f"[{self.name}:{trial_id}] Deep dive finished. Summary: {summary_text}")
+        return {
+            "trial_id": trial_id,
+            "summary": summary_text,
+            "analyzed_criteria": analyzed_results, # Detailed results for each criterion analyzed
+            "clarified_items": clarified_items, # Subset of analyzed_criteria that became MET
+            "remaining_gaps": remaining_gaps,   # Subset that are still NOT_MET/UNCLEAR/ERROR
+            "strategic_next_steps": strategic_next_steps,
+            "internal_search_results": internal_search_findings # Add search results to final report
+        } 
 
-        logging.debug(f"[{self.name}:{trial_id}] Deep dive report generated: {json.dumps(report, indent=2)}")
-        return report 
+    # --- Internal Search Helper Methods (Task 5.1.2) ---
+    def _search_lab_component(self, labs_data: List[Dict[str, Any]], lab_keywords: List[str]) -> List[Dict[str, Any]]:
+        """Searches lab data for specific components."""
+        findings = []
+        if not labs_data or not isinstance(labs_data, list):
+            return findings
+            
+        keywords_lower = [k.lower() for k in lab_keywords]
+        
+        for lab_panel in labs_data:
+            if not isinstance(lab_panel, dict): continue
+            panel_name = lab_panel.get('panelName', 'Unknown Panel')
+            lab_date = lab_panel.get('resultDate', lab_panel.get('orderDate', '?'))
+            for component in lab_panel.get('components', []):
+                if not isinstance(component, dict): continue
+                test_name = component.get('test', '')
+                if not test_name or not isinstance(test_name, str): continue
+                
+                test_name_lower = test_name.lower()
+                for keyword in keywords_lower:
+                    if keyword in test_name_lower:
+                        findings.append({
+                            "source": f"Lab Panel '{panel_name}' ({lab_date})",
+                            "context": f"{test_name}: {component.get('value', 'N/A')} {component.get('unit', '')} (Ref: {component.get('refRange', '?')})",
+                            "match": keyword
+                        })
+                        break # Found match for this component
+        return findings
+
+    def _search_keyword_sentence(self, notes_data: List[Dict[str, Any]], keywords: List[str]) -> List[Dict[str, Any]]:
+        """Searches notes for sentences containing specific keywords or regex patterns."""
+        findings = []
+        if not notes_data or not isinstance(notes_data, list):
+            return findings
+
+        # Compile keywords into a single regex pattern for efficiency if needed, 
+        # or just do simple lowercased substring checks.
+        # Using simple checks for now.
+        keywords_lower = [k.lower() for k in keywords if isinstance(k, str)] # Basic keywords
+        regex_patterns = [re.compile(p, re.IGNORECASE) for p in keywords if not isinstance(p, str)] # If patterns are included
+
+        for note in notes_data:
+            if not isinstance(note, dict): continue
+            note_text = note.get('text', '')
+            if not note_text or not isinstance(note_text, str): continue
+            note_source = f"Note ({note.get('date', '?')} by {note.get('provider', '?')})"
+            
+            # Simple sentence splitting
+            sentences = [s.strip() for s in re.split(r'(?<=[.!?\n])\s+', note_text) if s and s.strip()]
+            for sentence in sentences:
+                sentence_lower = sentence.lower()
+                found_match = None
+                # Check basic keywords
+                for keyword in keywords_lower:
+                    if keyword in sentence_lower:
+                        found_match = keyword
+                        break
+                # Check regex patterns if keyword not found
+                if not found_match:
+                    for pattern in regex_patterns:
+                        if pattern.search(sentence): # Use search on original sentence for regex
+                            found_match = pattern.pattern # Store the pattern as the match
+                            break
+                            
+                if found_match:
+                    findings.append({
+                        "source": note_source,
+                        "context": sentence,
+                        "match": found_match
+                    })
+                    # Don't break here, a sentence might match multiple keywords/patterns
+                    # If we only want the first match per sentence, add a break here.
+        return findings
+
+    def _search_mutation_list(self, mutations_data: List[Dict[str, Any]], gene_symbol: str) -> List[Dict[str, Any]]:
+        """Searches the mutations list for a specific gene symbol."""
+        findings = []
+        if not mutations_data or not isinstance(mutations_data, list) or not gene_symbol:
+            return findings
+            
+        gene_symbol_upper = gene_symbol.upper()
+        
+        for mutation in mutations_data:
+             # Access hugo_gene_symbol directly now it's top level in DB result
+            hugo_symbol = mutation.get('hugo_gene_symbol')
+            if hugo_symbol and isinstance(hugo_symbol, str) and hugo_symbol.upper() == gene_symbol_upper:
+                findings.append({
+                    "source": "Patient Mutations List (DB)",
+                    "context": f"Gene: {hugo_symbol}, Change: {mutation.get('protein_change', 'N/A')}, Type: {mutation.get('variant_type', 'N/A')}, Status: {mutation.get('mutation_status', 'N/A')}",
+                    "match": gene_symbol, # The gene symbol we searched for
+                    "raw_mutation_data": mutation # Include the whole record for context
+                })
+                # Continue searching, patient might have multiple mutations in the same gene
+                
+        return findings
+
+    def _search_medication_check(self, meds_data: List[Dict[str, Any]], known_list: List[str]) -> List[Dict[str, Any]]:
+        """Checks current medications against a known list of drugs."""
+        findings = []
+        if not meds_data or not isinstance(meds_data, list):
+            return findings
+            
+        known_list_lower = [k.lower() for k in known_list]
+        
+        for med in meds_data:
+            if not isinstance(med, dict): continue
+            med_name = med.get('name', '')
+            if not med_name or not isinstance(med_name, str): continue
+            
+            med_name_lower = med_name.lower()
+            for known_med in known_list_lower:
+                if known_med in med_name_lower: # Simple substring check
+                    findings.append({
+                        "source": "Current Medications List",
+                        "context": f"{med_name} {med.get('dosage', '')} {med.get('frequency', '')}",
+                        "match": known_med
+                    })
+                    break # Found match for this medication
+        return findings
+        
+    # --- End Internal Search Helpers --- 

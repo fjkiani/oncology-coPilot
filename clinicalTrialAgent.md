@@ -21,13 +21,13 @@ The Clinical Trial Agent aims to directly mitigate these challenges through inte
 
 The agent operates via the `/api/search-trials` backend endpoint and follows this workflow:
 
-1.  **Input:** Receives a search query (from user input or generated from patient context) and an optional structured `patient_context` object containing detailed patient data (demographics, diagnosis, labs, meds, history, notes, etc.).
+1.  **Input:** Receives a search query (from user input or generated from patient context) and an optional structured `patient_context` object containing detailed patient data (demographics, diagnosis, labs, meds, history, notes, etc.). **Crucially, this context is now enriched (via Task 5.1.0) to include a `"mutations"` key listing all known mutations for the patient from the merged cBioPortal data.**
 2.  **Query Embedding:** The user's text query is converted into a numerical vector embedding using a sentence transformer model (`all-MiniLM-L6-v2`).
 3.  **Semantic Candidate Retrieval:** The query embedding is used to search a local ChromaDB vector store. This store contains pre-computed embeddings of the *eligibility criteria text* for trials loaded from `documents.json`. The search returns the `source_url` (acting as trial ID) of the top N most semantically similar trials based on cosine similarity.
 4.  **Detailed Data Fetching:** The agent retrieves the full structured details (metadata, parsed text sections like criteria, description, objectives) for the candidate trials from a local SQLite database (`trials.db`) using the retrieved `source_url` identifiers.
 5.  **Parallel AI Assessment (if Patient Context Provided):**
     *   If `patient_context` is available, the agent initiates concurrent processing for all candidate trials using `asyncio.gather`.
-    *   For each trial, a **single combined prompt** is formatted, including the full `patient_context` (as JSON) and the trial's detailed inclusion/exclusion criteria.
+    *   For each trial, a **single combined prompt** is formatted, including the full `patient_context` (as JSON, including the `mutations` list) and the trial's detailed inclusion/exclusion criteria.
     *   This prompt instructs the LLM (Google Gemini `gemini-1.5-flash`) to perform **two tasks**: 
         1.  A detailed eligibility assessment comparing the patient profile to *each* criterion.
         2.  Generation of a concise (2-3 sentence) **patient-specific narrative summary** explaining the key reasons for the overall eligibility finding.
@@ -43,7 +43,7 @@ As implemented, the Clinical Trial Agent provides:
 
 *   **Context-Aware Search:** Ability to search based on free-text query or automatically generate a query from the loaded patient's primary diagnosis.
 *   **Semantic Matching:** Identifies trials with eligibility criteria semantically similar to the search query.
-*   **Detailed AI Eligibility Breakdown:** When patient context is provided, delivers a structured analysis showing which criteria are met, unmet, or unclear, along with reasoning/evidence from the LLM.
+*   **Detailed AI Eligibility Breakdown:** When patient context is provided, delivers a structured analysis showing which criteria are met, unmet, or unclear, along with reasoning/evidence from the LLM. **With the inclusion of the `mutations` list, this assessment is more accurate for basic genomic criteria (e.g., presence/absence of mutation in a specific gene).**
 *   **Patient-Specific Narrative Summary:** Generates a concise summary explaining the *outcome* of the eligibility check *for that specific patient*.
 *   **Optimized LLM Interaction:** Utilizes a single, combined LLM call per trial and parallel processing (`asyncio.gather`) to improve response time.
 *   **Robust Parsing:** Includes text cleaning steps to handle potential formatting inconsistencies in LLM responses.
