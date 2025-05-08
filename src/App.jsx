@@ -6,6 +6,7 @@ import MedicalRecords from "./pages/records/index";
 import ScreeningSchedule from "./pages/ScreeningSchedule";
 import SingleRecordDetails from "./pages/records/single-record-details";
 import Research from "./pages/Research";
+import MutationExplorer from "./pages/MutationExplorer";
 import { useStateContext } from "./context";
 
 const App = () => {
@@ -45,6 +46,7 @@ const App = () => {
           <Route path="/screening-schedules" element={<ScreeningSchedule />} />
           <Route path="/research/:patientId" element={<Research />} />
           <Route path="/research" element={<Research />} />
+          <Route path="/mutation-explorer" element={<MutationExplorer />} />
         </Routes>
       </div>
     </div>

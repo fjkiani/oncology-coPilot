@@ -242,13 +242,12 @@ async def get_patient_data(patient_id: str):
             conn.close()
 
     # Add mutations to the patient_info
-    # Make a copy to avoid modifying the original mock_patient_data_dict in memory
     patient_info_with_mutations = patient_info.copy()
     patient_info_with_mutations["mutations"] = mutations
     
-    return patient_info_with_mutations
+    return {"success": True, "data": patient_info_with_mutations}
 
-# --- New Prompt Endpoint using Orchestrator --- 
+# --- New Prompt Endpoint using Orchestrator ---
 class PromptRequest(BaseModel):
     prompt: str
 
@@ -1078,7 +1077,7 @@ async def websocket_endpoint(websocket: WebSocket):
             
 
 # Include the research API router
-app.include_router(research_router, prefix="/api/research", tags=["Research Portal"])
+app.include_router(research_router, prefix="/api/research", tags=["research"])
 
 # Simple root endpoint
 @app.get("/")

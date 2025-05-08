@@ -40,6 +40,119 @@ const CriteriaDisplayList = ({ title, items, icon: Icon, colorClass, detailKey =
   );
 };
 
+// Helper to get status icon and color
+const getStatusStyle = (status) => {
+  switch (status?.toUpperCase()) {
+    case 'MET':
+      return { Icon: CheckCircleIcon, colorClass: 'text-green-600', bgClass: 'bg-green-50' };
+    case 'NOT_MET':
+      return { Icon: XCircleIcon, colorClass: 'text-red-600', bgClass: 'bg-red-50' };
+    case 'UNCLEAR':
+      return { Icon: QuestionMarkCircleIcon, colorClass: 'text-yellow-600', bgClass: 'bg-yellow-50' };
+    case 'ERROR':
+    case 'ERROR_ANALYSIS_FAILED':
+    case 'ERROR_PARSING_FAILED':
+      return { Icon: ExclamationTriangleIcon, colorClass: 'text-orange-600', bgClass: 'bg-orange-50' };
+    default:
+      return { Icon: InformationCircleIcon, colorClass: 'text-gray-500', bgClass: 'bg-gray-50' };
+  }
+};
+
+// New component to render the structured deep dive report
+const DeepDiveReportDisplay = ({ report }) => {
+  if (!report) return null;
+
+  // Helper to render VEP details in a structured way
+  const renderVepDetails = (details) => {
+    if (!details || details.length === 0) return <p className="text-xs text-gray-500 italic mt-1">No VEP details available.</p>;
+    return (
+      <div className="mt-2 pl-4 border-l-2 border-blue-200">
+        <h6 className="text-xs font-semibold text-blue-800 mb-1">Simulated VEP Details:</h6>
+        <ul className="space-y-1">
+          {details.map((vep, index) => (
+            <li key={index} className="text-xs text-gray-700">
+              <span className="font-medium">{vep.gene_symbol} {vep.variant_identified}:</span> 
+              <span className={`ml-1 font-semibold ${vep.simulated_classification?.includes('VUS') ? 'text-purple-600' : vep.simulated_classification?.includes('PATHOGENIC') || vep.simulated_classification?.includes('ACTIVATING') || vep.simulated_classification?.includes('RESISTANCE') ? 'text-red-600' : 'text-gray-600'}`}>
+                {vep.simulated_classification}
+              </span>
+              <span className="block pl-2 text-gray-500 text-[11px]">↳ Reason: {vep.classification_reasoning}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  };
+
+  return (
+    <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-md shadow-inner">
+      <h6 className="text-sm font-semibold text-blue-800 border-b border-blue-200 pb-1 mb-2">Deep Dive Analysis Report</h6>
+      <p className="text-xs text-gray-700 mb-3 italic">{report.summary}</p>
+      
+      {/* Analyzed Criteria Section */}
+      <div className="mb-4">
+        <h4 className="font-semibold text-xs text-gray-800 mb-1.5">Analyzed Criteria Details:</h4>
+        <ul className="space-y-3">
+          {report.analyzed_criteria && report.analyzed_criteria.map((item, index) => {
+            const { Icon, colorClass } = getStatusStyle(item.status);
+            const isGenomic = item.analysis_source?.includes('GenomicAnalystAgent');
+            const genomicDetails = item.genomic_analysis_details;
+            
+            return (
+              <li key={index} className="text-xs border border-gray-200 bg-white p-2 rounded-md shadow-sm">
+                <div className="flex items-center justify-between mb-1">
+                  <span className={`font-semibold flex items-center ${colorClass}`}>
+                    <Icon className="h-4 w-4 mr-1.5" /> 
+                    {item.status || 'UNKNOWN'}
+                  </span>
+                  <span className="text-[10px] text-gray-400 italic ml-2">Source: {item.analysis_source || 'N/A'}</span>
+                </div>
+                <p className="font-medium text-gray-800 mb-1">{item.criterion}</p>
+                
+                {/* Conditional rendering for evidence/details */}
+                {isGenomic && genomicDetails ? (
+                  <div className="text-xs mt-1">
+                    <p className="text-gray-600">
+                      <span className="font-semibold">Gene Status Summary:</span> {JSON.stringify(genomicDetails.gene_summary_statuses || {})}
+                    </p>
+                    {renderVepDetails(genomicDetails.simulated_vep_details)}
+                  </div>
+                ) : (
+                  <pre className="text-xs text-gray-600 whitespace-pre-wrap font-sans bg-gray-50 p-1.5 rounded border border-gray-100 mt-1">{item.evidence || 'No evidence provided.'}</pre>
+                )}
+                
+                {/* Display internal search findings snippet if available */}
+                {item.internal_search_findings && item.internal_search_findings.length > 0 && (
+                  <p className="text-[11px] text-indigo-700 mt-1 pt-1 border-t border-indigo-100">
+                    <span className="font-semibold">Internal Context Found:</span> {item.internal_search_findings[0].context} ({item.internal_search_findings[0].source})
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+
+      {/* Strategic Next Steps Section */}
+      <div className="mt-4">
+        <h4 className="font-semibold text-xs text-gray-800 mb-1.5">Strategic Next Steps:</h4>
+        {report.strategic_next_steps && report.strategic_next_steps.length > 0 ? (
+          <ul className="space-y-2">
+            {report.strategic_next_steps.map((step, index) => (
+              <li key={index} className="text-xs border border-gray-200 bg-white p-2 rounded shadow-sm">
+                <p className="font-semibold text-indigo-800">{index + 1}. {step.action_type}: {step.description}</p>
+                <p className="text-gray-600 italic pl-3">Rationale: {step.rationale}</p>
+                {step.details && <p className="text-gray-500 text-[11px] pl-3">Details: {step.details}</p>}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-gray-500 italic">No specific next steps generated.</p>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // Updated component to render a single Trial Result with EXPANDABLE detailed AI eligibility
 const InterpretedTrialResult = ({ 
   item, 
@@ -211,44 +324,68 @@ const InterpretedTrialResult = ({
             {/* --- Panel 2: Eligibility Deep Dive --- */}       
             <div className="md:col-span-6 bg-white p-3 rounded border border-gray-200">
                 <h5 className="text-sm font-semibold mb-2 text-gray-700 border-b pb-1">Eligibility Analysis</h5>
-                {/* Met Criteria */}            
-                <CriteriaDisplayList
-                  title="Met Criteria"
-                  items={metCriteria}
-                  icon={CheckCircleIcon}
-                  colorClass="text-green"
-                />
-                 {/* Unmet Criteria */}            
-                <CriteriaDisplayList
-                  title="Unmet Criteria"
-                  items={unmetCriteria}
-                  icon={XCircleIcon}
-                  colorClass="text-red"
-                />
-                 {/* Unclear Criteria / Action Hub */}            
-                <div className="mb-1">
-                  <h6 className="flex items-center font-semibold text-sm text-yellow-700 mb-1.5">
-                    <QuestionMarkCircleIcon className="h-4 w-4 mr-1.5 text-yellow-600" />
-                    Unclear Criteria / Follow-ups ({unclearCriteria.length})
-                  </h6>
-                  {unclearCriteria.length === 0 ? (
-                      <p className="text-xs text-gray-500 pl-1">No unclear criteria identified.</p>
-                  ) : (
-                      <ul className="space-y-2 pl-1">
-                        {unclearCriteria.map((criterionItem, index) => (
-                          <li key={index} className="text-xs text-gray-700 bg-yellow-50 p-2 rounded border border-yellow-200">
-                            {/* Criterion Text & Reasoning */}                        
-                            <div>
-                              <span className="font-semibold block">{criterionItem.criterion}</span>
-                              {criterionItem.reasoning && 
-                                <span className="text-yellow-800 italic ml-1">- {criterionItem.reasoning}</span>
-                              }
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                  )}
-                </div>
+                
+                {/* Conditionally show Initial Analysis OR Deep Dive Report */}
+                {!deepDiveReport && (
+                  <>
+                    {/* Met Criteria (Initial) */}
+                    <CriteriaDisplayList
+                      title="Initial Assessment: Met Criteria"
+                      items={metCriteria}
+                      icon={CheckCircleIcon}
+                      colorClass="text-green"
+                    />
+                    {/* Unmet Criteria (Initial) */}
+                    <CriteriaDisplayList
+                      title="Initial Assessment: Unmet Criteria"
+                      items={unmetCriteria}
+                      icon={XCircleIcon}
+                      colorClass="text-red"
+                    />
+                    {/* Unclear Criteria / Action Hub (Initial) */}
+                    <div className="mb-1">
+                      <h6 className="flex items-center font-semibold text-sm text-yellow-700 mb-1.5">
+                        <QuestionMarkCircleIcon className="h-4 w-4 mr-1.5 text-yellow-600" />
+                        Initial Assessment: Unclear Criteria / Follow-ups ({unclearCriteria.length})
+                      </h6>
+                      {unclearCriteria.length === 0 ? (
+                          <p className="text-xs text-gray-500 pl-1">No unclear criteria identified initially.</p>
+                      ) : (
+                          <ul className="space-y-2 pl-1">
+                            {unclearCriteria.map((criterionItem, index) => (
+                              <li key={index} className="text-xs text-gray-700 bg-yellow-50 p-2 rounded border border-yellow-200">
+                                <div>
+                                  <span className="font-semibold block">{criterionItem.criterion}</span>
+                                  {criterionItem.reasoning && 
+                                    <span className="text-yellow-800 italic ml-1">- {criterionItem.reasoning}</span>
+                                  }
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                      )}
+                      {/* Deep Dive Button */}
+                      {(unmetCriteria.length > 0 || unclearCriteria.length > 0) && (
+                        <div className="mt-3 text-center">
+                          <button 
+                            onClick={handleRequestDeepDive}
+                            disabled={isDeepDiveLoading}
+                            className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                          >
+                            {isDeepDiveLoading ? 'Running Deep Dive...' : 'Request Eligibility Deep Dive'}
+                            {!isDeepDiveLoading && <FlagIcon className="ml-1.5 h-3 w-3"/>}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {/* Display Deep Dive Results */}
+                {isDeepDiveLoading && <p className="text-sm text-blue-600 italic text-center p-4">Loading Deep Dive Report...</p>}
+                {deepDiveError && <p className="text-sm text-red-600 italic text-center p-4">Error: {deepDiveError}</p>}
+                {deepDiveReport && <DeepDiveReportDisplay report={deepDiveReport} />}
+
             </div>
 
             {/* --- Panel 3: Agent Insights & Actions --- */}        

@@ -11,8 +11,28 @@
   ],
   "unclear_criteria": [
     {
-      "criterion": "ECOG Performance Status of 0 or 1",
-      "reasoning": "ECOG status not explicitly stated, requires inference from notes."
+      "criterion": "Patient has adequate organ function as defined by recent lab values (ANC > 1.5 x 10^9/L, Platelets > 100 x 10^9/L, Hemoglobin > 9 g/dL).",
+      "reasoning": "LLM could not find specific lab values in the provided snippet, needs verification."
+    },
+    {
+      "criterion": "ECOG performance status of 0 or 1.",
+      "reasoning": "Performance status not explicitly stated in the limited notes provided."
+    },
+    {
+      "criterion": "Patient must have activating BRAF mutation.",
+      "reasoning": "Initial screen did not confirm functional status of BRAF mutation."
+    },
+    {
+      "criterion": "Patient must be EGFR wild-type.",
+      "reasoning": "Initial screen flagged potential EGFR mutation, requires confirmation of wild-type status."
+    },
+    {
+      "criterion": "Requires pathogenic alteration in TP53.",
+      "reasoning": "TP53 status requires detailed assessment of pathogenicity."
+    },
+    {
+      "criterion": "Absence of activating KRAS mutation.",
+      "reasoning": "Need to confirm KRAS mutational status is wild-type or non-activating."
     },
     {
       "criterion": "Patient must have Alanine Aminotransferase (ALT) <= 3 times the upper limit of normal (ULN)",
@@ -165,7 +185,56 @@
         "text": "Routine follow-up. BP and A1c stable. Reviewed oncology plan. Reinforced supportive care measures."
       }
     ],
-    "mutations": []
+    "mutations": [
+      {
+        "unique_variant_id": "BRAF_V600E_1",
+        "hugo_gene_symbol": "BRAF",
+        "variant_type": "Missense_Mutation",
+        "protein_change": "p.V600E",
+        "chromosome": "7",
+        "start_position": 140453136,
+        "end_position": 140453136,
+        "reference_allele": "T",
+        "variant_allele": "A",
+        "variant_classification": "Missense_Mutation"
+      },
+      {
+        "unique_variant_id": "EGFR_L858R_1",
+        "hugo_gene_symbol": "EGFR",
+        "variant_type": "Missense_Mutation",
+        "protein_change": "p.L858R",
+        "chromosome": "7",
+        "start_position": 55259515,
+        "end_position": 55259515,
+        "reference_allele": "T",
+        "variant_allele": "G",
+        "variant_classification": "Missense_Mutation"
+      },
+      {
+        "unique_variant_id": "TP53_R196*_1",
+        "hugo_gene_symbol": "TP53",
+        "variant_type": "Nonsense_Mutation",
+        "protein_change": "p.R196*",
+        "chromosome": "17",
+        "start_position": 7578406,
+        "end_position": 7578406,
+        "reference_allele": "C",
+        "variant_allele": "T",
+        "variant_classification": "Nonsense_Mutation"
+      },
+      {
+        "unique_variant_id": "TP53_P72R_1",
+        "hugo_gene_symbol": "TP53",
+        "variant_type": "Missense_Mutation",
+        "protein_change": "p.P72R",
+        "chromosome": "17",
+        "start_position": 7579312,
+        "end_position": 7579312,
+        "reference_allele": "C",
+        "variant_allele": "G",
+        "variant_classification": "Missense_Mutation"
+      }
+    ]
   },
   "trial_data": {
     "nct_id": "NCT00TEST001",

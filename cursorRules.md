@@ -624,4 +624,63 @@ Sub-Task Group 3: `GenomicAnalystAgent` V1 (Simulated VEP)
     [ ] 3.4: **Implement Core `run` Method of `GenomicAnalystAgent` V1:**
         *   (Sub-tasks remain largely the same - orchestrate parser, iterate mutations, apply `classify_variant`, determine overall status, construct output).
 
-    [ ] 3.5: **Unit Testing for `
+    [ ] 3.5: **Unit Testing for `GenomicAnalystAgent` V1:**
+        *   [ ] 3.5.1: Test cases for variants handled by `known_variant_classifications`.
+        *   [ ] 3.5.2: Test cases for variants processed by the mock Evo2 API (covering different mock outputs).
+        *   [ ] 3.5.3: Test fallback logic (if implemented).
+        *   [ ] 3.5.4: Test correct evidence string generation.
+
+---
+
+**New Major Feature: `GenomicAnalystAgent` V1.5 (Mock Evo2) & "Mutation Explorer" Frontend**
+
+**Overall Goal:** Enhance genomic analysis capabilities by integrating a mock advanced VEP (Evo2) into the `GenomicAnalystAgent` and create a dedicated frontend "Mutation Explorer" page for users to interact with these analyses.
+
+**Phase 1: Backend - `GenomicAnalystAgent` V1.5 with Mock Evo2 API**
+    *   [ ] **1.1: Define and Implement Mock Evo2 API (`backend/api_mocks/mock_evo2_api.py`)**
+        *   [ ] 1.1.1: Define function signature: `call_mock_evo2_variant_analyzer(gene: str, protein_change: str, variant_type: Optional[str] = None) -> Dict[str, Any]`.
+        *   [ ] 1.1.2: Define mock API output structure (e.g., `mock_predicted_effect`, `mock_score`, `mock_confidence`).
+        *   [ ] 1.1.3: Implement mock behavior:
+            *   [ ] Use a dictionary for specific `(gene, protein_change)` to predefined mock outputs.
+            *   [ ] For unlisted variants, use `variant_type` for general mock predictions.
+    *   [ ] **1.2: Refactor `GenomicAnalystAgent` (`backend/agents/genomic_analyst_agent.py`)**
+        *   [ ] 1.2.1: Create new method `_get_variant_effect_prediction_mock_evo2(self, gene_symbol: str, variant_data: Dict[str, Any]) -> Tuple[str, str]`.
+            *   [ ] This method will call `call_mock_evo2_variant_analyzer` from `backend.api_mocks.mock_evo2_api`.
+            *   [ ] It will translate the mock API's output into the agent's existing classification system (e.g., "PREDICTED_PATHOGENIC_BY_MOCK_EVO2").
+        *   [ ] 1.2.2: Modify `_classify_variant_simulated` (or its caller in `run`) to implement a hybrid approach:
+            *   [ ] 1. Check `self.known_variant_classifications` (predefined rules).
+            *   [ ] 2. If not found, call `_get_variant_effect_prediction_mock_evo2`.
+            *   [ ] 3. (Optional) Implement fallback to `self.variant_type_rules` if mock Evo2 returns "UNCLEAR".
+        *   [ ] 1.2.3: Update evidence string generation to reflect the source of analysis (known rule, mock Evo2).
+    *   [ ] **1.3: Unit Testing for `GenomicAnalystAgent` (Enhanced)**
+        *   [ ] 1.3.1: Test cases for variants handled by `known_variant_classifications`.
+        *   [ ] 1.3.2: Test cases for variants processed by the mock Evo2 API (covering different mock outputs).
+        *   [ ] 1.3.3: Test fallback logic (if implemented).
+        *   [ ] 1.3.4: Test correct evidence string generation.
+
+**Phase 2: Frontend - New "Mutation Explorer" Page/Component**
+    *   [ ] **2.1: Conceptualize and Design the "Mutation Explorer" UI/UX**
+        *   [ ] 2.1.1: Define layout for patient mutation list display (table: Gene, Protein Change, Variant Type).
+        *   [ ] 2.1.2: Design UI for analysis trigger (selection of mutations and/or free-text "genomic query" input).
+        *   [ ] 2.1.3: Design results display area (for each analyzed variant: source, predicted effect, mock score/confidence, reasoning; overall assessment for query).
+        *   [ ] 2.1.4: Include placeholders for future external links (OncoKB, CIViC etc.).
+        *   [ ] 2.1.5: Ensure UI clearly indicates "Mock Evo2 Simulation" for VEP results.
+    *   [ ] **2.2: Design Backend API Endpoint for "Mutation Explorer"**
+        *   [ ] 2.2.1: Define endpoint: `POST /api/research/mutation-analysis`.
+        *   [ ] 2.2.2: Define request Pydantic model: `{ "patient_id": str, "genomic_query": str, "target_mutation_ids": Optional[List[str]] }`.
+        *   [ ] 2.2.3: Ensure endpoint uses `GenomicAnalystAgent.run()` and returns its structured output.
+    *   [ ] **2.3: Implement Frontend "Mutation Explorer" Page/Component (`src/pages/MutationExplorer.jsx` or similar)**
+        *   [ ] 2.3.1: Implement patient mutation list fetching and display.
+        *   [ ] 2.3.2: Implement UI for query input / mutation selection.
+        *   [ ] 2.3.3: Implement API call to `/api/research/mutation-analysis`.
+        *   [ ] 2.3.4: Implement results display logic.
+    *   [ ] **2.4: Backend - Implement the new API Endpoint (in `backend/research/router.py` or `backend/main.py`)**
+        *   [ ] 2.4.1: Add the FastAPI route for `POST /api/research/mutation-analysis`.
+        *   [ ] 2.4.2: Implement logic to fetch patient mutations, instantiate `GenomicAnalystAgent`, call its `run` method, and return the result.
+
+**Phase 3: Integration Testing and Refinement**
+    *   [ ] 3.1: Test end-to-end flow: Frontend "Mutation Explorer" -> Backend API -> `GenomicAnalystAgent` (with mock Evo2) -> Results displayed on frontend.
+    *   [ ] 3.2: Refine UI/UX based on testing.
+    *   [ ] 3.3: Refine mock API behavior and agent logic as needed.
+
+---

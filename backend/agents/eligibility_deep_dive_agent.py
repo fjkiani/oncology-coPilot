@@ -135,7 +135,7 @@ DEFAULT_LLM_GENERATION_CONFIG = {
 
 # Attempt to import the specific agent, handle if not found
 try:
-    from .genomic_analyst_agent import GenomicAnalystAgent
+    from .genomic_analyst_agent import GenomicAnalystAgent, GenomicAnalysisResult
 except ImportError:
     logging.warning("GenomicAnalystAgent not found. Genomic analysis features will be unavailable.")
     GenomicAnalystAgent = None # Set to None if import fails
@@ -220,12 +220,16 @@ class EligibilityDeepDiveAgent(AgentInterface):
 
         # If it's a genomic criterion and we have genomic data, delegate to GenomicAnalystAgent
         if is_genomic_criterion:
-            if patient_data.get('genomics'):
-                logging.debug(f"[EligibilityDeepDiveAgent:{trial_id}] Delegating to GenomicAnalystAgent...")
+            # 'patient_data' here is actually patient_data_snippet from the run method
+            patient_mutations_list = patient_data.get('mutations') # Use 'mutations' key from snippet
+            patient_id_for_agent = patient_data.get('patientId') # Use 'patientId' key from snippet
+
+            if patient_mutations_list is not None: # Check if mutations list exists (can be empty)
+                logging.debug(f"[EligibilityDeepDiveAgent:{trial_id}] Delegating to GenomicAnalystAgent for patient {patient_id_for_agent}...")
                 try:
                     # Check if GenomicAnalystAgent is available (import might have failed)
                     try:
-                        from .genomic_analyst_agent import GenomicAnalystAgent 
+                        from .genomic_analyst_agent import GenomicAnalystAgent, GenomicAnalysisResult 
                     except ImportError:
                          logging.error(f"[EligibilityDeepDiveAgent:{trial_id}] GenomicAnalystAgent class not found. Cannot perform genomic analysis.")
                          result.update({
@@ -236,18 +240,29 @@ class EligibilityDeepDiveAgent(AgentInterface):
                          return result
 
                     genomic_agent = GenomicAnalystAgent()
-                    genomic_result = await genomic_agent.run(
+                    # Corrected call to GenomicAnalystAgent.run
+                    genomic_run_result = await genomic_agent.run(
                         genomic_query=criterion,
-                        patient_genomic_data=patient_data['genomics']
+                        patient_id=patient_id_for_agent if patient_id_for_agent else "UNKNOWN_PATIENT", # Provide patient_id
+                        patient_mutations=patient_mutations_list # Provide the mutations list
                     )
                     
+                    # Ensure genomic_run_result is a dictionary for consistent access
+                    if isinstance(genomic_run_result, GenomicAnalysisResult):
+                        genomic_result_dict = genomic_run_result.model_dump() if hasattr(genomic_run_result, 'model_dump') else vars(genomic_run_result)
+                    elif isinstance(genomic_run_result, dict):
+                        genomic_result_dict = genomic_run_result
+                    else:
+                        logging.error(f"[EligibilityDeepDiveAgent:{trial_id}] Unexpected result type from GenomicAnalystAgent: {type(genomic_run_result)}")
+                        genomic_result_dict = {"status": "ERROR", "evidence": "Invalid result from genomic agent."}
+
                     result.update({
-                        "status": genomic_result.get("status", "UNCLEAR"),
-                        "evidence": genomic_result.get("evidence", "No evidence provided"),
-                        "analysis_source": "GenomicAnalystAgent (Mock)" # Update source on success
+                        "status": genomic_result_dict.get("status", "UNCLEAR"),
+                        "evidence": genomic_result_dict.get("evidence", "No evidence provided by GenomicAnalystAgent"),
+                        "analysis_source": "GenomicAnalystAgent" # Update source on success
                     })
-                    logging.info(f"[EligibilityDeepDiveAgent:{trial_id}] Mock genomic analysis complete.")
-                    return result # Return result from GenomicAnalystAgent
+                    logging.info(f"[EligibilityDeepDiveAgent:{trial_id}] Genomic analysis via GenomicAnalystAgent complete. Status: {genomic_result_dict.get('status')}")
+                    return result 
                 except Exception as e:
                     logging.error(f"[EligibilityDeepDiveAgent:{trial_id}] Error during GenomicAnalystAgent execution: {str(e)}", exc_info=True)
                     result.update({

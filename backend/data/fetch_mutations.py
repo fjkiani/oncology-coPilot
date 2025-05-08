@@ -83,3 +83,4 @@ except json.JSONDecodeError as e:
     exit(1)
 
 print("Mutation fetching complete.")
+ 
